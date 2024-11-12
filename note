@@ -1,0 +1,118 @@
+multi-exchange-arbitrage/
+├── __init__.py
+├── src/
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── base_exchange.py          # Базовый класс для всех бирж, содержащий общие методы и интерфейсы
+│   │   └── exchanges/
+│   │       ├── __init__.py
+│   │       ├── binance/
+│   │       │   ├── __init__.py
+│   │       │   ├── binance_spot_api.py       # Реализация API для работы с Binance Spot, наследует BaseExchangeAPI
+│   │       │   └── binance_constants.py      # Константы, специфичные для Binance, такие как URL и параметры API
+│   │       └── newexchange/
+│   │           ├── __init__.py
+│   │           ├── newexchange_spot_api.py       # Реализация API для работы с новой биржей, наследует BaseExchangeAPI
+│   │           └── newexchange_constants.py      # Константы, специфичные для новой биржи, такие как URL и параметры API
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── exchange_fee.py       # Модель данных для комиссий биржи, описывает структуру данных комиссий
+│   │   │   ├── pair_data.py          # Модель данных для торговых пар, описывает структуру данных торговых пар
+│   │   │   └── network.py            # Модель данных для сетей, описывает структуру данных сетей валют
+│   ├── data/
+│   │   ├── __init__.py
+│   │   └── collectors/
+│   │       ├── __init__.py
+│   │       ├── binance_collector.py  # Сборщик данных для Binance, использует API для получения и обработки данных
+│   │       ├── newexchange_collector.py  # Сборщик данных для новой биржи, использует API для получения и обработки данных
+│   │       └── base_collector.py     # Базовый класс для всех сборщиков данных
+│   ├── database/
+│   │   ├── __init__.py
+│   │   └── repositories/
+│   │       ├── __init__.py
+│   │       ├── base_repository.py    # Базовый класс для всех репозиториев, содержит общие методы работы с БД
+│   │       ├── arbitrage_repository.py # Репозиторий для работы с данными об арбитраже
+│   │       ├── market_repository.py  # Репозиторий для работы с рыночными данными, такими как торговые пары
+│   │       ├── fee_repository.py     # Репозиторий для работы с данными о комиссиях
+│   │       └── network_repository.py # Репозиторий для работы с данными о сетях
+│   ├── strategies/
+│   │   ├── __init__.py
+│   │   └── arbitrage/
+│   │       ├── __init__.py
+│   │       ├── monitor.py            # Модуль для мониторинга арбитражных возможностей
+│   │       └── finder.py             # Модуль для поиска арбитражных возможностей
+│   └── utils/
+│       ├── __init__.py
+│       ├── time_sync.py              # Утилита для синхронизации времени с сервером биржи
+│       └── logger.py                 # Утилита для логирования, настраивает и управляет логами приложения
+├── config/
+│   ├── __init__.py
+│   └── settings.py                   # Конфигурационные настройки проекта, такие как параметры подключения к БД
+├── scripts/
+│   ├── __init__.py
+│   ├── setup_env.py                  # Скрипт для настройки окружения
+│   └── utils/
+│       ├── __init__.py
+│       └── path_utils.py             # Утилиты для работы с путями
+├── tests/
+│   ├── __init__.py
+│   └── test_market_data_collection.py # Тесты для проверки сбора рыночных данных
+├── data/
+│   ├── backups/
+│   └── arbitrage_data.db            # База данных для хранения данных об арбитраже
+├── logs/
+│   └── ...                          # Логи приложения
+├── .env                            # Переменные окружения
+├── requirements.txt                  # Список зависимостей проекта
+├── .gitignore                      # Файл, содержащий список игнорируемых файлов Git
+├── note                            # Файл с описанием проекта
+├── .venv                           # Виртуальное окружение Python
+└── main.py                           # Основной файл для запуска приложения
+
+
+     .\venv\Scripts\activate
+        deactivate
+
+DATABASE_URL=sqlite:///arbitrage_data.db
+BINANCE_API_KEY=your_api_key
+BINANCE_API_SECRET=your_secret_key
+
+python -m exchanges.binance.binance_api
+Создание коммита (сохранение текущего состояния):
+   git commit -m "Начальный коммит"
+
+Когда у вас есть рабочая версия, создайте тег:
+   git tag -a v1.0 -m "Рабочая версия 1.0"
+
+Просмотр тегов:
+   git tag
+
+Возврат к определенной версии:
+   git checkout v1.0
+
+Возврат к последней версии:
+   git checkout main
+
+Проверьте, инициализирован ли Git в вашей директории:
+   git init
+
+Убедитесь, что все ваши изменения закоммичены. Если есть несохраненные изменения, сначала выполните:
+   git add .
+   git commit -m "Описание ваших изменений"
+
+Затем создайте новый тег:
+   git tag -a v2.0 -m "Рабочая версия 2.0"
+
+Чтобы убедиться, что тег создан, выполните:
+   git tag
+
+Если вы хотите отправить этот тег в удаленный репозиторий (если он у вас есть), используйте:
+   git push origin v2.0
+
+Теперь у вас есть отмеченная версия кода, к которой вы всегда можете вернуться, используя команду:
+   git checkout v2.0
+
+    BINANCE_API_KEY = "EwBq46vVWPjLivsGXxygXNTUhYIuMvd5452tWVj2lp2DVooxsZhh5qZMO5gPoxzg"
+    BINANCE_SECRET_KEY = "P1XVMY3s4H7URRr23tQN3KexcHWyVGqROV135N1yyKIACCZQFC3OKymqm8qHgjCr"

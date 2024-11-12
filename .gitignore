@@ -1,0 +1,6 @@
+исходные коды/
+venv/
+__pycache__/
+*.pyc
+.env
+app.log
