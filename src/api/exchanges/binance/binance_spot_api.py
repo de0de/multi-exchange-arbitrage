@@ -2,6 +2,7 @@ from src.api.base_exchange import BaseExchangeAPI
 from src.api.exchanges.binance.binance_constants import BASE_URL, EXCHANGE_NAME
 from src.core.models.pair_data import PairData
 from src.core.models.exchange_fee import ExchangeFee
+from src.core.models.network import Network
 from typing import List
 from datetime import datetime
 import os
@@ -80,3 +81,25 @@ class BinanceSpotAPI(BaseExchangeAPI):
         # Реализуйте логику для получения base_currency и quote_currency
         # Например, вы можете использовать словарь или запрос к базе данных
         return "BTC", "USDT"  # Пример: возвращаем фиксированные валюты
+
+    async def fetch_currency_networks(self) -> List[Network]:
+        await self.init_session()
+        response = await self._make_request('GET', '/sapi/v1/capital/config/getall', auth_required=True)
+        networks = []
+        for coin in response:
+            for network in coin['networkList']:
+                timestamp = datetime.now().timestamp()
+                readable_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                networks.append(Network(
+                    currency=coin['coin'],
+                    network=network['network'],
+                    name=network.get('name', network['network']),
+                    withdraw_fee=float(network['withdrawFee']),
+                    min_withdraw=float(network['withdrawMin']),
+                    deposit_enabled=network['depositEnable'],
+                    withdraw_enabled=network['withdrawEnable'],
+                    timestamp=timestamp,
+                    readable_time=readable_time
+                ))
+        self.logger.info(f"Fetched network info for {len(networks)} networks")
+        return networks

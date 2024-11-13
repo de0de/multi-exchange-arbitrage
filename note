@@ -116,3 +116,40 @@ python -m exchanges.binance.binance_api
 
     BINANCE_API_KEY = "EwBq46vVWPjLivsGXxygXNTUhYIuMvd5452tWVj2lp2DVooxsZhh5qZMO5gPoxzg"
     BINANCE_SECRET_KEY = "P1XVMY3s4H7URRr23tQN3KexcHWyVGqROV135N1yyKIACCZQFC3OKymqm8qHgjCr"
+
+
+├── src/
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── base_exchange.py          # Базовый класс для всех бирж, содержащий общие методы и интерфейсы
+│   │   └── exchanges/
+│   │       ├── cex/
+│   │       │   ├── __init__.py
+│   │       │   ├── binance/
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── binance_spot_api.py       
+│   │       │   │   └── binance_constants.py      
+│   │       │   ├── newexchange/
+│   │       │   ├── __init__.py
+│   │       │   ├── newexchange_spot_api.py       
+│   │       │   └── newexchange_constants.py      
+│   │       ├── dex/
+│   │       │   ├── __init__.py
+│   │       │   ├── uniswap/
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── uniswap_spot_api.py       
+│   │       │   │   └── uniswap_constants.py      
+│   │       │   ├── newexchange/
+│   │       │   ├── __init__.py
+│   │       │   ├── newexchange_spot_api.py       
+│   │       │   └── newexchange_constants.py
+
+
+├── src/
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── base_exchange.py          # Базовый класс для всех бирж, содержащий общие методы и интерфейсы
+│   │   ├── exchanges/
+│   │   ├── криптообменники/
+│   │   ├── платежные системы (типа PayPAL, Stripe, онлайн банки и т.д.)/
+│   │   ├── другие возможные источники на которых возможно проводить анализ и арбитражные возможности/
