@@ -15,16 +15,12 @@ class MarketRepository(BaseRepository):
         self._create_tables()
 
     def _connect(self):
-        # Извлекаем путь к базе данных из URL
         db_path = self.db_url.replace('sqlite:///', '')
-        # Создаем директорию, если она не существует
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        # Подключаемся к базе данных
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
 
     def _create_tables(self):
-        # Создаем таблицу exchanges, если она не существует
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS exchanges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +28,6 @@ class MarketRepository(BaseRepository):
             )
         ''')
 
-        # Создаем таблицу trading_pairs, если она не существует
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS trading_pairs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +51,6 @@ class MarketRepository(BaseRepository):
         self.conn.commit()
 
     def get_or_create_exchange_id(self, exchange_name: str) -> int:
-        # Получаем или создаем идентификатор биржи
         self.cursor.execute('SELECT id FROM exchanges WHERE name = ?', (exchange_name,))
         result = self.cursor.fetchone()
         if result:
@@ -67,10 +61,8 @@ class MarketRepository(BaseRepository):
             return self.cursor.lastrowid
 
     def save_trading_pairs(self, pairs: List[PairData]):
-        # Сохраняем торговые пары в базу данных
         for pair in pairs:
             exchange_id = self.get_or_create_exchange_id(pair.exchange)
-            # Используем UPDATE для обновления существующих записей
             self.cursor.execute('''
                 UPDATE trading_pairs
                 SET standardized_pair = ?, base_currency = ?, quote_currency = ?,
@@ -83,7 +75,6 @@ class MarketRepository(BaseRepository):
                 pair.bid_volume, pair.ask_volume, pair.timestamp, pair.readable_time,
                 exchange_id, pair.original_pair
             ))
-            # Если запись не обновилась, вставляем новую
             if self.cursor.rowcount == 0:
                 self.cursor.execute('''
                     INSERT INTO trading_pairs (
@@ -97,3 +88,20 @@ class MarketRepository(BaseRepository):
                 ))
         self.conn.commit()
         self.logger.info(f"Updated {len(pairs)} trading pairs in the database")
+
+    def get_existing_trading_pairs(self) -> List[tuple]:
+        self.cursor.execute('SELECT id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency FROM trading_pairs')
+        return self.cursor.fetchall()
+
+    def copy_trading_pairs_to_fees(self):
+        self.cursor.execute('''
+            INSERT OR IGNORE INTO exchange_fees (id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency)
+            SELECT id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency
+            FROM trading_pairs
+        ''')
+        self.conn.commit()
+        self.logger.info("Copied trading pairs to exchange fees table")
+
+    def close(self):
+        self.conn.close()
+        self.logger.info("Database connection closed")

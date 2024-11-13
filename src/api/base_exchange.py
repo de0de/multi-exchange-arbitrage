@@ -1,6 +1,10 @@
 import aiohttp
 import logging
-from typing import Dict, Any
+import hmac
+import hashlib
+import time
+from typing import Dict, Any, List
+from src.core.models.exchange_fee import ExchangeFee
 
 class BaseExchangeAPI:
     BASE_URL = ""
@@ -27,8 +31,12 @@ class BaseExchangeAPI:
         headers = {}
 
         if auth_required:
-            # Добавьте логику для аутентификации, если необходимо
-            pass
+            timestamp = int(time.time() * 1000)
+            params['timestamp'] = timestamp
+            query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+            signature = hmac.new(self.secret_key.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+            params['signature'] = signature
+            headers['X-MBX-APIKEY'] = self.api_key
 
         try:
             async with self.session.request(method, url, params=params, headers=headers) as response:
@@ -40,4 +48,7 @@ class BaseExchangeAPI:
                     return {}
         except Exception as e:
             self.logger.error(f"Request error: {e}")
-            return {} 
+            return {}
+
+    async def fetch_exchange_fees(self) -> List[ExchangeFee]:
+        raise NotImplementedError("This method should be overridden by subclasses")

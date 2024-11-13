@@ -6,4 +6,7 @@ class BaseDataCollector:
         self.logger = logging.getLogger(__name__)
 
     async def collect_data(self):
+        raise NotImplementedError("This method should be overridden by subclasses")
+
+    async def collect_fees(self):
         raise NotImplementedError("This method should be overridden by subclasses") 
