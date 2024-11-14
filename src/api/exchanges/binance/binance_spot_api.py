@@ -86,6 +86,7 @@ class BinanceSpotAPI(BaseExchangeAPI):
         await self.init_session()
         response = await self._make_request('GET', '/sapi/v1/capital/config/getall', auth_required=True)
         networks = []
+        exchange_id = self.get_exchange_id(self.EXCHANGE_NAME)
         for coin in response:
             for network in coin['networkList']:
                 timestamp = datetime.now().timestamp()
@@ -99,7 +100,8 @@ class BinanceSpotAPI(BaseExchangeAPI):
                     deposit_enabled=network['depositEnable'],
                     withdraw_enabled=network['withdrawEnable'],
                     timestamp=timestamp,
-                    readable_time=readable_time
+                    readable_time=readable_time,
+                    exchange_id=exchange_id
                 ))
         self.logger.info(f"Fetched network info for {len(networks)} networks")
         return networks

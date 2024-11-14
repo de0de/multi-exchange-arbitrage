@@ -15,6 +15,7 @@ class NetworkRepository:
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS networks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    exchange_id INTEGER,
                     currency TEXT NOT NULL,
                     network TEXT NOT NULL,
                     name TEXT,
@@ -40,7 +41,7 @@ class NetworkRepository:
                         UPDATE networks
                         SET name = ?, withdraw_fee = ?, min_withdraw = ?,
                             deposit_enabled = ?, withdraw_enabled = ?,
-                            timestamp = ?, readable_time = ?
+                            timestamp = ?, readable_time = ?, exchange_id = ?
                         WHERE currency = ? AND network = ?
                     ''', (
                         network.name,
@@ -50,6 +51,7 @@ class NetworkRepository:
                         network.withdraw_enabled,
                         network.timestamp,
                         network.readable_time,
+                        network.exchange_id,
                         network.currency,
                         network.network
                     ))
@@ -58,8 +60,8 @@ class NetworkRepository:
                             INSERT INTO networks (
                                 currency, network, name, withdraw_fee,
                                 min_withdraw, deposit_enabled, withdraw_enabled,
-                                timestamp, readable_time
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                timestamp, readable_time, exchange_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ''', (
                             network.currency,
                             network.network,
@@ -69,7 +71,8 @@ class NetworkRepository:
                             network.deposit_enabled,
                             network.withdraw_enabled,
                             network.timestamp,
-                            network.readable_time
+                            network.readable_time,
+                            network.exchange_id
                         ))
             self.logger.info(f"Saved {len(networks)} networks")
         except sqlite3.Error as e:

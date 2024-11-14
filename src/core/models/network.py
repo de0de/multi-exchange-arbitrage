@@ -10,4 +10,5 @@ class Network:
     deposit_enabled: bool
     withdraw_enabled: bool
     timestamp: float
-    readable_time: str 
+    readable_time: str
+    exchange_id: int 
