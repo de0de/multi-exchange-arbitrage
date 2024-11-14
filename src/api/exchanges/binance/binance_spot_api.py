@@ -6,14 +6,19 @@ from src.core.models.network import Network
 from typing import List
 from datetime import datetime
 import os
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env
+load_dotenv()
 
 class BinanceSpotAPI(BaseExchangeAPI):
     BASE_URL = BASE_URL
     EXCHANGE_NAME = EXCHANGE_NAME
 
     def __init__(self):
-        self.api_key = "gqpdIUz8ZW39a9y34a8o9Wz3VJMk1McsEo7lyfbnQ7qJvTEcdyE8qIYW9COzHMUR"
-        self.secret_key = "yIRccSqMKVoJoYeviLqeWaCMNNOjmKtAWqhzAnh0LJ4YoA0jDwDMJv8OotzLn71c"
+        # Получаем ключи из переменных окружения
+        self.api_key = os.getenv("BINANCE_API_KEY")
+        self.secret_key = os.getenv("BINANCE_API_SECRET")
         super().__init__(self.api_key, self.secret_key)
 
     async def fetch_trading_pairs(self) -> List[PairData]:
