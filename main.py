@@ -30,6 +30,15 @@ async def main():
     unique_currencies = currencies_repo.extract_unique_currencies()
     currencies_repo.populate_currencies_table(unique_currencies)
     
+    # Обновляем currency_id в таблице trading_pairs
+    market_repo.update_currency_ids()
+
+    # Обновляем currency_id в таблице exchange_fees
+    fee_repo.update_currency_ids()
+
+    # Обновляем currency_id в таблице networks
+    network_repo.update_currency_id()
+
     # Интервал обновления в секундах
     update_interval = 5
 

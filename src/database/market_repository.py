@@ -35,7 +35,9 @@ class MarketRepository(BaseRepository):
                 original_pair TEXT,
                 standardized_pair TEXT,
                 base_currency TEXT,
+                base_currency_id INTEGER,
                 quote_currency TEXT,
+                quote_currency_id INTEGER,
                 price REAL,
                 volume REAL,
                 bid REAL,
@@ -105,3 +107,19 @@ class MarketRepository(BaseRepository):
     def close(self):
         self.conn.close()
         self.logger.info("Database connection closed")
+
+    def update_currency_ids(self):
+        try:
+            self.cursor.execute('''
+                UPDATE trading_pairs
+                SET base_currency_id = (
+                    SELECT id FROM currencies WHERE currencies.name = trading_pairs.base_currency
+                ),
+                quote_currency_id = (
+                    SELECT id FROM currencies WHERE currencies.name = trading_pairs.quote_currency
+                )
+            ''')
+            self.conn.commit()
+            self.logger.info("Updated currency_id values in trading pairs table")
+        except sqlite3.Error as e:
+            self.logger.error(f"Error updating currency_id values: {e}")

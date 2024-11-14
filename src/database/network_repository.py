@@ -14,9 +14,10 @@ class NetworkRepository:
         try:
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS networks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    network_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     exchange_id INTEGER,
                     currency TEXT NOT NULL,
+                    currency_id INTEGER,
                     network TEXT NOT NULL,
                     name TEXT,
                     withdraw_fee REAL,
@@ -80,4 +81,26 @@ class NetworkRepository:
 
     def close(self):
         self.conn.close()
-        self.logger.info("Database connection closed") 
+        self.logger.info("Database connection closed")
+
+    def add_currency_id_column(self):
+        try:
+            self.cursor.execute('ALTER TABLE networks ADD COLUMN currency_id INTEGER')
+            self.conn.commit()
+            self.logger.info("Added currency_id column to networks table")
+        except sqlite3.Error as e:
+            self.logger.error(f"Error adding currency_id column: {e}")
+
+    def update_currency_id(self):
+        try:
+            self.cursor.execute('''
+                UPDATE networks
+                SET currency_id = (
+                    SELECT id FROM currencies WHERE currencies.name = networks.currency
+                )
+            ''')
+            self.conn.commit()
+            self.logger.info("Updated currency_id values in networks table")
+        except sqlite3.Error as e:
+            self.logger.error(f"Error updating currency_id values: {e}")
+  

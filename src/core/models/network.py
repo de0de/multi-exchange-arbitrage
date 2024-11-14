@@ -11,4 +11,7 @@ class Network:
     withdraw_enabled: bool
     timestamp: float
     readable_time: str
-    exchange_id: int 
+    exchange_id: int
+    network_id: int = None
+    currency_id: int = None
+ 

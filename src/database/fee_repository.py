@@ -20,7 +20,9 @@ class FeeRepository:
                     original_pair TEXT,
                     standardized_pair TEXT,
                     base_currency TEXT,
+                    base_currency_id INTEGER,
                     quote_currency TEXT,
+                    quote_currency_id INTEGER,
                     maker_fee REAL,
                     taker_fee REAL,
                     timestamp DATETIME,
@@ -66,4 +68,21 @@ class FeeRepository:
 
     def get_original_pairs(self) -> List[str]:
         self.cursor.execute('SELECT original_pair FROM exchange_fees')
-        return [row[0] for row in self.cursor.fetchall()] 
+        return [row[0] for row in self.cursor.fetchall()]
+
+    def update_currency_ids(self):
+        try:
+            self.cursor.execute('''
+                UPDATE exchange_fees
+                SET base_currency_id = (
+                    SELECT id FROM currencies WHERE currencies.name = exchange_fees.base_currency
+                ),
+                quote_currency_id = (
+                    SELECT id FROM currencies WHERE currencies.name = exchange_fees.quote_currency
+                )
+            ''')
+            self.conn.commit()
+            self.logger.info("Updated currency_id values in exchange fees table")
+        except sqlite3.Error as e:
+            self.logger.error(f"Error updating currency_id values: {e}")
+  
