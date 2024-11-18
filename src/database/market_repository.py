@@ -22,13 +22,6 @@ class MarketRepository(BaseRepository):
 
     def _create_tables(self):
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS exchanges (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
-            )
-        ''')
-
-        self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS trading_pairs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 exchange_id INTEGER,

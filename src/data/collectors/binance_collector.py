@@ -3,13 +3,15 @@ from src.api.exchanges.binance.binance_spot_api import BinanceSpotAPI
 from src.database.market_repository import MarketRepository
 from src.database.fee_repository import FeeRepository
 from src.database.network_repository import NetworkRepository
+from src.database.exchanges_repository import ExchangesRepository
 
 class BinanceCollector(BaseDataCollector):
-    def __init__(self, api: BinanceSpotAPI, market_repo: MarketRepository, fee_repo: FeeRepository, network_repo: NetworkRepository):
+    def __init__(self, api: BinanceSpotAPI, market_repo: MarketRepository, fee_repo: FeeRepository, network_repo: NetworkRepository, exchanges_repo: ExchangesRepository):
         super().__init__(api)
         self.market_repo = market_repo
         self.fee_repo = fee_repo
         self.network_repo = network_repo
+        self.exchanges_repo = exchanges_repo
 
     async def collect_data(self):
         pairs = await self.api.fetch_trading_pairs()
@@ -34,3 +36,9 @@ class BinanceCollector(BaseDataCollector):
         if networks:
             self.network_repo.save_networks(networks)
             self.logger.info(f"Collected {len(networks)} networks from Binance")
+
+        # Collect exchange data
+        exchange_data = await self.api.fetch_account_balance()
+        self.logger.debug(f"Fetched exchange data: {exchange_data}")
+        self.exchanges_repo.save_or_update_exchange(exchange_data)
+        self.logger.info(f"Collected exchange data for {exchange_data.name}")

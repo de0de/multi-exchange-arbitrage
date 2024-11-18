@@ -47,7 +47,9 @@ class CurrenciesRepository:
         try:
             with self.conn:
                 for currency in currencies:
-                    self.cursor.execute('INSERT OR IGNORE INTO currencies (name) VALUES (?)', (currency,))
+                    self.cursor.execute('SELECT id FROM currencies WHERE name = ?', (currency,))
+                    if not self.cursor.fetchone():
+                        self.cursor.execute('INSERT INTO currencies (name) VALUES (?)', (currency,))
             self.conn.commit()
             self.logger.info(f"Inserted {len(currencies)} unique currencies into the table")
         except sqlite3.Error as e:

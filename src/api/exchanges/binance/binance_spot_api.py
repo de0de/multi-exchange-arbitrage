@@ -7,6 +7,7 @@ from typing import List
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from src.core.models.exchanges import Exchange
 
 # Загружаем переменные окружения из .env
 load_dotenv()
@@ -23,35 +24,48 @@ class BinanceSpotAPI(BaseExchangeAPI):
 
     async def fetch_trading_pairs(self) -> List[PairData]:
         await self.init_session()
-        exchange_info = await self._make_request('GET', '/api/v3/exchangeInfo')
-        symbols = {s['symbol']: s for s in exchange_info['symbols'] if s['status'] == 'TRADING'}
-        
-        book_tickers = await self._make_request('GET', '/api/v3/ticker/bookTicker')
-        book_dict = {t['symbol']: t for t in book_tickers}
-        
-        price_data = await self._make_request('GET', '/api/v3/ticker/24hr')
-        pairs = []
-        for pair_data in price_data:
-            if pair_data['symbol'] in symbols:
-                timestamp = datetime.now().timestamp()
-                readable_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-                pairs.append(PairData(
-                    exchange=self.EXCHANGE_NAME,
-                    original_pair=pair_data['symbol'],
-                    standardized_pair=pair_data['symbol'],
-                    base_currency=symbols[pair_data['symbol']]['baseAsset'],
-                    quote_currency=symbols[pair_data['symbol']]['quoteAsset'],
-                    price=float(pair_data['lastPrice']),
-                    volume=float(pair_data['volume']),
-                    bid=float(book_dict[pair_data['symbol']]['bidPrice']),
-                    ask=float(book_dict[pair_data['symbol']]['askPrice']),
-                    bid_volume=float(book_dict[pair_data['symbol']]['bidQty']),
-                    ask_volume=float(book_dict[pair_data['symbol']]['askQty']),
-                    timestamp=timestamp,
-                    readable_time=readable_time
-                ))
-        self.logger.info(f"Successfully fetched {len(pairs)} trading pairs")
-        return pairs 
+        try:
+            exchange_info = await self._make_request('GET', '/api/v3/exchangeInfo')
+            
+            # Логируем полный ответ для диагностики
+            self.logger.debug(f"Exchange info response: {exchange_info}")
+
+            # Проверяем наличие ключа 'symbols'
+            if 'symbols' not in exchange_info:
+                self.logger.error("Key 'symbols' not found in exchange info response")
+                return []
+
+            symbols = {s['symbol']: s for s in exchange_info['symbols'] if s['status'] == 'TRADING'}
+            
+            book_tickers = await self._make_request('GET', '/api/v3/ticker/bookTicker')
+            book_dict = {t['symbol']: t for t in book_tickers}
+            
+            price_data = await self._make_request('GET', '/api/v3/ticker/24hr')
+            pairs = []
+            for pair_data in price_data:
+                if pair_data['symbol'] in symbols:
+                    timestamp = datetime.now().timestamp()
+                    readable_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                    pairs.append(PairData(
+                        exchange=self.EXCHANGE_NAME,
+                        original_pair=pair_data['symbol'],
+                        standardized_pair=pair_data['symbol'],
+                        base_currency=symbols[pair_data['symbol']]['baseAsset'],
+                        quote_currency=symbols[pair_data['symbol']]['quoteAsset'],
+                        price=float(pair_data['lastPrice']),
+                        volume=float(pair_data['volume']),
+                        bid=float(book_dict[pair_data['symbol']]['bidPrice']),
+                        ask=float(book_dict[pair_data['symbol']]['askPrice']),
+                        bid_volume=float(book_dict[pair_data['symbol']]['bidQty']),
+                        ask_volume=float(book_dict[pair_data['symbol']]['askQty']),
+                        timestamp=timestamp,
+                        readable_time=readable_time
+                    ))
+            self.logger.info(f"Successfully fetched {len(pairs)} trading pairs")
+            return pairs
+        except Exception as e:
+            self.logger.error(f"Error fetching trading pairs: {e}")
+            return []
 
     async def fetch_exchange_fees(self, original_pairs: List[str]) -> List[ExchangeFee]:
         await self.init_session()
@@ -110,3 +124,41 @@ class BinanceSpotAPI(BaseExchangeAPI):
                 ))
         self.logger.info(f"Fetched network info for {len(networks)} networks")
         return networks
+
+    async def fetch_account_balance(self) -> Exchange:
+        await self.init_session()
+        account_info = await self._make_request('GET', '/api/v3/account', auth_required=True)
+        
+        usdt_balance = 0.0
+        spot_balance_usdt = 0.0
+        total_balance_usdt = 0.0
+        futures_balance_usdt = 0.0  # Если нужно, добавьте логику для получения фьючерсного баланса
+
+        # Получаем цены для конвертации в USDT
+        prices = await self._make_request('GET', '/api/v3/ticker/price')
+        price_dict = {item['symbol']: float(item['price']) for item in prices}
+
+        for balance in account_info['balances']:
+            asset = balance['asset']
+            free_amount = float(balance['free'])
+            
+            if asset == 'USDT':
+                usdt_balance = free_amount
+                spot_balance_usdt += free_amount
+            else:
+                # Конвертируем другие активы в эквивалент USDT
+                symbol = f"{asset}USDT"
+                if symbol in price_dict:
+                    spot_balance_usdt += free_amount * price_dict[symbol]
+
+        total_balance_usdt = spot_balance_usdt + futures_balance_usdt
+
+        return Exchange(
+            id=None,  # Установите соответствующий ID, если нужно
+            name=self.EXCHANGE_NAME,
+            usdt_balance=usdt_balance,
+            total_balance_usdt=total_balance_usdt,
+            spot_balance_usdt=spot_balance_usdt,
+            futures_balance_usdt=futures_balance_usdt,
+            additional_info=""
+        )
