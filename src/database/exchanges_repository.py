@@ -16,9 +16,7 @@ class ExchangesRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL,
                     usdt_balance REAL DEFAULT 0,
-                    total_balance_usdt REAL DEFAULT 0,
                     spot_balance_usdt REAL DEFAULT 0,
-                    futures_balance_usdt REAL DEFAULT 0,
                     additional_info TEXT
                 )
             ''')
@@ -44,30 +42,30 @@ class ExchangesRepository:
             # Сначала попробуем обновить существующую запись
             self.cursor.execute('''
                 UPDATE exchanges
-                SET usdt_balance = ?, total_balance_usdt = ?, spot_balance_usdt = ?, futures_balance_usdt = ?, additional_info = ?
+                SET usdt_balance = ?, spot_balance_usdt = ?, additional_info = ?
                 WHERE name = ?
-            ''', (exchange.usdt_balance, exchange.total_balance_usdt, exchange.spot_balance_usdt, exchange.futures_balance_usdt, exchange.additional_info, exchange.name))
+            ''', (exchange.usdt_balance, exchange.spot_balance_usdt, exchange.additional_info, exchange.name))
             
             # Если ни одна строка не была обновлена, вставляем новую запись
             if self.cursor.rowcount == 0:
                 self.cursor.execute('''
-                    INSERT INTO exchanges (name, usdt_balance, total_balance_usdt, spot_balance_usdt, futures_balance_usdt, additional_info)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (exchange.name, exchange.usdt_balance, exchange.total_balance_usdt, exchange.spot_balance_usdt, exchange.futures_balance_usdt, exchange.additional_info))
+                    INSERT INTO exchanges (name, usdt_balance, spot_balance_usdt, additional_info)
+                    VALUES (?, ?, ?, ?)
+                ''', (exchange.name, exchange.usdt_balance, exchange.spot_balance_usdt, exchange.additional_info))
 
             self.conn.commit()
             self.logger.info(f"Saved or updated exchange data for {exchange.name}")
         except sqlite3.Error as e:
             self.logger.error(f"Error saving or updating exchange data for {exchange.name}: {e}")
 
-    def update_balances(self, exchange_name: str, usdt_balance: float, spot_balance_usdt: float, futures_balance_usdt: float):
+    def update_balances(self, exchange_name: str, usdt_balance: float, spot_balance_usdt: float):
         try:
             self.logger.debug(f"Updating balances for {exchange_name}")
             self.cursor.execute('''
                 UPDATE exchanges
-                SET usdt_balance = ?, spot_balance_usdt = ?, futures_balance_usdt = ?, total_balance_usdt = ?
+                SET usdt_balance = ?, spot_balance_usdt = ?
                 WHERE name = ?
-            ''', (usdt_balance, spot_balance_usdt, futures_balance_usdt, usdt_balance + futures_balance_usdt, exchange_name))
+            ''', (usdt_balance, spot_balance_usdt, exchange_name))
             
             self.conn.commit()
             self.logger.info(f"Updated balances for {exchange_name}")
