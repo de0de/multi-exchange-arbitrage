@@ -1,7 +1,7 @@
 import logging
-from src.data.collectors.base_collector import BaseDataCollector
-from src.api.exchanges.binance.binance_spot_api import BinanceSpotAPI
-from src.api.exchanges.binance.binance_account_api import BinanceAccountAPI
+from src.data.base_collector import BaseDataCollector
+from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
+from src.api.exchanges.cex.binance.binance_account_api import BinanceAccountAPI
 from src.database.market_repository import MarketRepository
 from src.database.fee_repository import FeeRepository
 from src.database.network_repository import NetworkRepository

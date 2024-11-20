@@ -5,15 +5,26 @@ multi-exchange-arbitrage/
 │   │   ├── __init__.py
 │   │   ├── base_exchange.py          # Базовый класс для всех бирж, содержащий общие методы и интерфейсы
 │   │   └── exchanges/
-│   │       ├── __init__.py
-│   │       ├── binance/
+│   │       ├── cex/
 │   │       │   ├── __init__.py
-│   │       │   ├── binance_spot_api.py       # Реализация API для работы с Binance Spot, наследует BaseExchangeAPI
-│   │       │   └── binance_constants.py      # Константы, специфичные для Binance, такие как URL и параметры API
-│   │       └── newexchange/
-│   │           ├── __init__.py
-│   │           ├── newexchange_spot_api.py       # Реализация API для работы с новой биржей, наследует BaseExchangeAPI
-│   │           └── newexchange_constants.py      # Константы, специфичные для новой биржи, такие как URL и параметры API
+│   │       │   ├── binance/
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── binance_spot_api.py       
+│   │       │   │   └── binance_constants.py      
+│   │       │   ├── newexchange/
+│   │       │   │   ├── __init__.py
+│   │       │   │   └── newexchange_spot_api.py       
+│   │       │   └── newexchange_constants.py      
+│   │       ├── dex/
+│   │       │   ├── __init__.py
+│   │       │   ├── uniswap/
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── uniswap_spot_api.py       
+│   │       │   │   └── uniswap_constants.py      
+│   │       │   ├── newexchange/
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── newexchange_spot_api.py       
+│   │       │   │   └── newexchange_constants.py
 │   ├── core/
 │   │   ├── __init__.py
 │   │   ├── models/
@@ -23,20 +34,22 @@ multi-exchange-arbitrage/
 │   │   │   └── network.py            # Модель данных для сетей, описывает структуру данных сетей валют
 │   ├── data/
 │   │   ├── __init__.py
+│   │   ├── base_collector.py         # Базовый класс для всех сборщиков данных
 │   │   └── collectors/
-│   │       ├── __init__.py
-│   │       ├── binance_collector.py  # Сборщик данных для Binance, использует API для получения и обработки данных
-│   │       ├── newexchange_collector.py  # Сборщик данных для новой биржи, использует API для получения и обработки данных
-│   │       └── base_collector.py     # Базовый класс для всех сборщиков данных
+│   │       ├── cex
+│   │       │   ├── binance_collector.py  # Сборщик данных для Binance, использует API для получения и обработки данных
+│   │       │   └── newexchange_collector.py  # Сборщик данных для новой биржи, использует API для получения и обработки данных
+│   │       │
+│   │       ├── dex
+│   │       └── ...
 │   ├── database/
 │   │   ├── __init__.py
-│   │   └── repositories/
-│   │       ├── __init__.py
-│   │       ├── base_repository.py    # Базовый класс для всех репозиториев, содержит общие методы работы с БД
-│   │       ├── arbitrage_repository.py # Репозиторий для работы с данными об арбитраже
-│   │       ├── market_repository.py  # Репозиторий для работы с рыночными данными, такими как торговые пары
-│   │       ├── fee_repository.py     # Репозиторий для работы с данными о комиссиях
-│   │       └── network_repository.py # Репозиторий для работы с данными о сетях
+│   │   ├── base_repository.py    # Базовый класс для всех репозиториев, содержит общие методы работы с БД
+│   │   ├── currencies_repository.py 
+│   │   ├── exchanges_repository.py
+│   │   ├── market_repository.py  # Репозиторий для работы с рыночными данными, такими как торговые пары
+│   │   ├── fee_repository.py     # Репозиторий для работы с данными о комиссиях
+│   │   └── network_repository.py # Репозиторий для работы с данными о сетях
 │   ├── strategies/
 │   │   ├── __init__.py
 │   │   └── arbitrage/
@@ -130,8 +143,8 @@ python -m exchanges.binance.binance_api
 │   │       │   │   ├── binance_spot_api.py       
 │   │       │   │   └── binance_constants.py      
 │   │       │   ├── newexchange/
-│   │       │   ├── __init__.py
-│   │       │   ├── newexchange_spot_api.py       
+│   │       │   │   ├── __init__.py
+│   │       │   │   └── newexchange_spot_api.py       
 │   │       │   └── newexchange_constants.py      
 │   │       ├── dex/
 │   │       │   ├── __init__.py
@@ -140,9 +153,9 @@ python -m exchanges.binance.binance_api
 │   │       │   │   ├── uniswap_spot_api.py       
 │   │       │   │   └── uniswap_constants.py      
 │   │       │   ├── newexchange/
-│   │       │   ├── __init__.py
-│   │       │   ├── newexchange_spot_api.py       
-│   │       │   └── newexchange_constants.py
+│   │       │   │   ├── __init__.py
+│   │       │   │   ├── newexchange_spot_api.py       
+│   │       │   │   └── newexchange_constants.py
 
 
 ├── src/

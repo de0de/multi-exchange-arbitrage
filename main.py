@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from src.api.exchanges.binance.binance_spot_api import BinanceSpotAPI
-from src.data.collectors.binance_collector import BinanceCollector
+from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
+from src.data.collectors.cex.binance_collector import BinanceCollector
 from src.database.market_repository import MarketRepository
 from src.database.fee_repository import FeeRepository
 from src.database.network_repository import NetworkRepository
