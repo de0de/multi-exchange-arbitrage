@@ -4,6 +4,5 @@ from dataclasses import dataclass
 class Exchange:
     id: int
     name: str
-    usdt_balance: float = 0.0
-    spot_balance_usdt: float = 0.0
-    additional_info: str = "" 
+    maker_fee: float = 0.001
+    taker_fee: float = 0.001 

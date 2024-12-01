@@ -24,11 +24,6 @@ class CurrenciesRepository:
             self.logger.error(f"Error creating currencies table: {e}")
 
     def extract_unique_currencies(self) -> List[str]:
-        # Извлечение уникальных валют из таблицы networks
-        self.cursor.execute('SELECT DISTINCT currency FROM networks')
-        network_currencies = {row[0] for row in self.cursor.fetchall()}
-        self.logger.info(f"Network currencies: {network_currencies}")
-
         # Извлечение уникальных валют из таблицы trading_pairs
         self.cursor.execute('SELECT DISTINCT base_currency FROM trading_pairs')
         base_currencies = {row[0] for row in self.cursor.fetchall()}
@@ -39,7 +34,7 @@ class CurrenciesRepository:
         self.logger.info(f"Quote currencies: {quote_currencies}")
 
         # Объединение всех уникальных валют
-        all_currencies = network_currencies.union(base_currencies, quote_currencies)
+        all_currencies = base_currencies.union(quote_currencies)
         self.logger.info(f"All unique currencies: {all_currencies}")
         return list(all_currencies)
 

@@ -3,14 +3,13 @@ import logging
 import hmac
 import hashlib
 import time
-from typing import Dict, Any, List
-from src.core.models.exchange_fee import ExchangeFee
+from typing import Dict, Any
 
 class BaseExchangeAPI:
     BASE_URL = ""
     EXCHANGE_NAME = ""
 
-    def __init__(self, api_key: str, secret_key: str):
+    def __init__(self, api_key: str = None, secret_key: str = None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.session = None
@@ -30,7 +29,7 @@ class BaseExchangeAPI:
         params = params or {}
         headers = {}
 
-        if auth_required:
+        if auth_required and self.api_key and self.secret_key:
             timestamp = int(time.time() * 1000)
             params['timestamp'] = timestamp
             query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
@@ -50,5 +49,5 @@ class BaseExchangeAPI:
             self.logger.error(f"Request error: {e}")
             return {}
 
-    async def fetch_exchange_fees(self) -> List[ExchangeFee]:
+    async def fetch_exchange_fees(self):
         raise NotImplementedError("This method should be overridden by subclasses")

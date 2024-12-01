@@ -3,8 +3,6 @@ import logging
 from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
 from src.data.collectors.cex.binance_collector import BinanceCollector
 from src.database.market_repository import MarketRepository
-from src.database.fee_repository import FeeRepository
-from src.database.network_repository import NetworkRepository
 from src.database.currencies_repository import CurrenciesRepository
 from src.database.exchanges_repository import ExchangesRepository
 from src.utils.logger import setup_logging
@@ -20,13 +18,11 @@ async def main():
     # Создаем экземпляры репозиториев
     logger.info("Initializing repositories")
     market_repo = MarketRepository(DATABASE_URL)
-    fee_repo = FeeRepository(DATABASE_URL.replace('sqlite:///', ''))
-    network_repo = NetworkRepository(DATABASE_URL.replace('sqlite:///', ''))
     currencies_repo = CurrenciesRepository(DATABASE_URL.replace('sqlite:///', ''))
     exchanges_repo = ExchangesRepository(DATABASE_URL.replace('sqlite:///', ''))
     
     # Передаем репозитории в коллектор
-    collector = BinanceCollector(binance_api, market_repo, fee_repo, network_repo, exchanges_repo)
+    collector = BinanceCollector(binance_api, market_repo, exchanges_repo)
     
     # Сначала собираем данные о сетях и торговых парах
     logger.info("Starting data collection")
@@ -39,26 +35,18 @@ async def main():
     # Обновляем currency_id в таблице trading_pairs
     market_repo.update_currency_ids()
 
-    # Обновляем currency_id в таблице exchange_fees
-    fee_repo.update_currency_ids()
-
-    # Обновляем currency_id в таблице networks
-    network_repo.update_currency_id()
-
     # Интервал обновления в секундах
     update_interval = 5
 
     try:
         while True:
-            await collector.collect_data()  # Сбор данных о торговых парах, комиссиях и сетях
+            await collector.collect_data()  # Сбор данных о торговых парах и сетях
             await asyncio.sleep(update_interval)
     except asyncio.CancelledError:
         pass
     finally:
         await binance_api.close_session()
         market_repo.close()
-        fee_repo.close()
-        network_repo.close()
         currencies_repo.close()
         exchanges_repo.close()
 
