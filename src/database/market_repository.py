@@ -7,12 +7,13 @@ from typing import List
 from datetime import datetime
 
 class MarketRepository(BaseRepository):
-    def __init__(self, db_url: str):
+    def __init__(self, db_url: str, exchange_name: str):
         self.db_url = db_url
+        self.exchange_name = exchange_name.lower()
         self.conn = None
         self.logger = logging.getLogger(__name__)
         self._connect()
-        self._create_tables()
+        self._create_table()
 
     def _connect(self):
         db_path = self.db_url.replace('sqlite:///', '')
@@ -20,9 +21,10 @@ class MarketRepository(BaseRepository):
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
 
-    def _create_tables(self):
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trading_pairs (
+    def _create_table(self):
+        table_name = f"{self.exchange_name}_trading_pairs"
+        self.cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 exchange_id INTEGER,
                 original_pair TEXT,
@@ -56,10 +58,11 @@ class MarketRepository(BaseRepository):
             return self.cursor.lastrowid
 
     def save_trading_pairs(self, pairs: List[PairData]):
+        table_name = f"{self.exchange_name}_trading_pairs"
         for pair in pairs:
             exchange_id = self.get_or_create_exchange_id(pair.exchange)
-            self.cursor.execute('''
-                UPDATE trading_pairs
+            self.cursor.execute(f'''
+                UPDATE {table_name}
                 SET standardized_pair = ?, base_currency = ?, quote_currency = ?,
                     price = ?, volume = ?, bid = ?, ask = ?, bid_volume = ?, ask_volume = ?,
                     timestamp = ?, readable_time = ?
@@ -71,8 +74,8 @@ class MarketRepository(BaseRepository):
                 exchange_id, pair.original_pair
             ))
             if self.cursor.rowcount == 0:
-                self.cursor.execute('''
-                    INSERT INTO trading_pairs (
+                self.cursor.execute(f'''
+                    INSERT INTO {table_name} (
                         exchange_id, original_pair, standardized_pair, base_currency,
                         quote_currency, price, volume, bid, ask, bid_volume, ask_volume, timestamp, readable_time
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -84,32 +87,20 @@ class MarketRepository(BaseRepository):
         self.conn.commit()
         self.logger.info(f"Updated {len(pairs)} trading pairs in the database")
 
-    def get_existing_trading_pairs(self) -> List[tuple]:
-        self.cursor.execute('SELECT id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency FROM trading_pairs')
-        return self.cursor.fetchall()
-
-    def copy_trading_pairs_to_fees(self):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO exchange_fees (id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency)
-            SELECT id, exchange_id, original_pair, standardized_pair, base_currency, quote_currency
-            FROM trading_pairs
-        ''')
-        self.conn.commit()
-        self.logger.info("Copied trading pairs to exchange fees table")
-
     def close(self):
         self.conn.close()
         self.logger.info("Database connection closed")
 
     def update_currency_ids(self):
+        table_name = f"{self.exchange_name}_trading_pairs"
         try:
-            self.cursor.execute('''
-                UPDATE trading_pairs
+            self.cursor.execute(f'''
+                UPDATE {table_name}
                 SET base_currency_id = (
-                    SELECT id FROM currencies WHERE currencies.name = trading_pairs.base_currency
+                    SELECT id FROM currencies WHERE currencies.name = {table_name}.base_currency
                 ),
                 quote_currency_id = (
-                    SELECT id FROM currencies WHERE currencies.name = trading_pairs.quote_currency
+                    SELECT id FROM currencies WHERE currencies.name = {table_name}.quote_currency
                 )
             ''')
             self.conn.commit()

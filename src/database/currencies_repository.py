@@ -23,18 +23,29 @@ class CurrenciesRepository:
         except sqlite3.Error as e:
             self.logger.error(f"Error creating currencies table: {e}")
 
+    def get_trading_tables(self) -> List[str]:
+        """Получает список всех таблиц _trading_pairs в базе данных."""
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_trading_pairs'")
+        tables = [row[0] for row in self.cursor.fetchall()]
+        self.logger.info(f"Found trading pair tables: {tables}")
+        return tables
+
     def extract_unique_currencies(self) -> List[str]:
-        # Извлечение уникальных валют из таблицы trading_pairs
-        self.cursor.execute('SELECT DISTINCT base_currency FROM trading_pairs')
-        base_currencies = {row[0] for row in self.cursor.fetchall()}
-        self.logger.info(f"Base currencies: {base_currencies}")
+        """Извлекает уникальные валюты из всех таблиц _trading_pairs."""
+        all_currencies = set()
+        tables = self.get_trading_tables()
 
-        self.cursor.execute('SELECT DISTINCT quote_currency FROM trading_pairs')
-        quote_currencies = {row[0] for row in self.cursor.fetchall()}
-        self.logger.info(f"Quote currencies: {quote_currencies}")
+        for table in tables:
+            self.cursor.execute(f'SELECT DISTINCT base_currency FROM {table}')
+            base_currencies = {row[0] for row in self.cursor.fetchall()}
+            self.logger.info(f"Base currencies from {table}: {base_currencies}")
 
-        # Объединение всех уникальных валют
-        all_currencies = base_currencies.union(quote_currencies)
+            self.cursor.execute(f'SELECT DISTINCT quote_currency FROM {table}')
+            quote_currencies = {row[0] for row in self.cursor.fetchall()}
+            self.logger.info(f"Quote currencies from {table}: {quote_currencies}")
+
+            all_currencies.update(base_currencies.union(quote_currencies))
+
         self.logger.info(f"All unique currencies: {all_currencies}")
         return list(all_currencies)
 
