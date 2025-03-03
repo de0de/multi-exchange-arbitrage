@@ -29,6 +29,7 @@ class MarketRepository(BaseRepository):
                 exchange_id INTEGER,
                 original_pair TEXT,
                 standardized_pair TEXT,
+                pair_id INTEGER,
                 base_currency TEXT,
                 base_currency_id INTEGER,
                 quote_currency TEXT,
@@ -42,6 +43,7 @@ class MarketRepository(BaseRepository):
                 timestamp REAL,
                 readable_time TEXT,
                 FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
+                FOREIGN KEY (pair_id) REFERENCES unique_trading_pairs(id),
                 UNIQUE(exchange_id, original_pair)
             )
         ''')
@@ -107,3 +109,26 @@ class MarketRepository(BaseRepository):
             self.logger.info("Updated currency_id values in trading pairs table")
         except sqlite3.Error as e:
             self.logger.error(f"Error updating currency_id values: {e}")
+
+    def update_pair_ids(self):
+        table_name = f"{self.exchange_name}_trading_pairs"
+        try:
+            self.logger.info(f"Updating pair_id in {table_name}")
+            self.cursor.execute(f'''
+                UPDATE {table_name}
+                SET pair_id = (
+                    SELECT id
+                    FROM unique_pairs
+                    WHERE unique_pairs.standardized_pair = {table_name}.standardized_pair
+                )
+            ''')
+            self.conn.commit()
+            self.logger.info(f"Successfully updated pair_id values in {table_name}")
+        except sqlite3.Error as e:
+            self.logger.error(f"Error updating pair_id values in {table_name}: {e}")
+
+    def get_trading_tables(self):
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_trading_pairs'")
+        tables = [row[0] for row in self.cursor.fetchall()]
+        self.logger.info(f"Found trading pair tables: {tables}")
+        return tables
