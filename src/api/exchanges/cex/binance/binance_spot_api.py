@@ -1,4 +1,4 @@
-from src.api.base_exchange import BaseExchangeAPI
+from src.api.exchanges.cex.base_cex_exchange import BaseExchangeAPI
 from src.core.models.pair_data import PairData
 from typing import List
 from datetime import datetime
