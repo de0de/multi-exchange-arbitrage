@@ -62,10 +62,12 @@ async def main():
     kucoin_collector = KuCoinCollector(kucoin_api, market_repo_kucoin, exchanges_repo)
     
     try:
-        # Сначала собираем данные о сетях и торговых парах
-        logger.info("Начинаем сбор данных")
-        await binance_collector.collect_data()
-        await kucoin_collector.collect_data()
+        # Сначала собираем данные о сетях и торговых парах параллельно
+        logger.info("Начинаем сбор данных (параллельно)")
+        await asyncio.gather(
+            binance_collector.collect_data(),
+            kucoin_collector.collect_data()
+        )
         
         # Создаем и заполняем таблицу currencies
         logger.info("Извлекаем уникальные валюты")
@@ -107,27 +109,22 @@ async def main():
         while not shutdown_event.is_set():
             cycle_start = time.time()
             
-            # Сбор данных с Binance
-            try:
-                logger.debug("Сбор данных с Binance")
-                await binance_collector.collect_data()
-                # Записываем успешный запрос в мониторинг
-                request_time = (time.time() - cycle_start) * 1000  # в миллисекундах
-                health_monitor.record_request("Binance", True, request_time)
-            except Exception as e:
-                logger.error(f"Ошибка при сборе данных с Binance: {str(e)}")
-                health_monitor.record_request("Binance", False, 0, str(e))
+            # Параллельный сбор данных с обеих бирж
+            logger.debug("Параллельный сбор данных с Binance и KuCoin")
+            results = await asyncio.gather(
+                binance_collector.collect_data(),
+                kucoin_collector.collect_data(),
+                return_exceptions=True
+            )
             
-            # Сбор данных с KuCoin
-            try:
-                logger.debug("Сбор данных с KuCoin")
-                await kucoin_collector.collect_data()
-                # Записываем успешный запрос в мониторинг
+            # Обрабатываем результаты для каждой биржи
+            for exchange_name, result in zip(["Binance", "KuCoin"], results):
                 request_time = (time.time() - cycle_start) * 1000  # в миллисекундах
-                health_monitor.record_request("KuCoin", True, request_time)
-            except Exception as e:
-                logger.error(f"Ошибка при сборе данных с KuCoin: {str(e)}")
-                health_monitor.record_request("KuCoin", False, 0, str(e))
+                if isinstance(result, Exception):
+                    logger.error(f"Ошибка при сборе данных с {exchange_name}: {str(result)}")
+                    health_monitor.record_request(exchange_name, False, 0, str(result))
+                else:
+                    health_monitor.record_request(exchange_name, True, request_time)
             
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start
