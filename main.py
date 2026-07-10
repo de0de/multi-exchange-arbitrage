@@ -4,8 +4,10 @@ import sqlite3
 import signal
 import time
 from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
+from src.api.exchanges.cex.binance.binance_futures_api import BinanceFuturesAPI
 from src.api.exchanges.cex.kucoin.kucoin_spot_api import KuCoinSpotAPI
 from src.data.collectors.cex.binance_collector import BinanceCollector
+from src.data.collectors.cex.binance_futures_collector import BinanceFuturesCollector
 from src.data.collectors.cex.kucoin_collector import KuCoinCollector
 from src.database.market_repository import MarketRepository
 from src.database.currencies_repository import CurrenciesRepository
@@ -42,11 +44,13 @@ async def main():
     
     # Создаем экземпляры API
     binance_api = BinanceSpotAPI()
+    binance_futures_api = BinanceFuturesAPI()
     kucoin_api = KuCoinSpotAPI()
     
     # Создаем экземпляры репозиториев с общим подключением
     logger.info("Инициализация репозиториев")
     market_repo_binance = MarketRepository(db_path, "binance")
+    market_repo_binance_futures = MarketRepository(db_path, "binance_futures")
     market_repo_kucoin = MarketRepository(db_path, "kucoin")
     currencies_repo = CurrenciesRepository(conn)
     exchanges_repo = ExchangesRepository(db_path)
@@ -55,10 +59,12 @@ async def main():
     # Запускаем мониторинг здоровья бирж
     await health_monitor.start_monitoring(report_interval=300)  # Отчет каждые 5 минут
     health_monitor.register_exchange("Binance")
+    health_monitor.register_exchange("Binance Futures")
     health_monitor.register_exchange("KuCoin")
     
     # Создаем коллекторы
     binance_collector = BinanceCollector(binance_api, market_repo_binance, exchanges_repo)
+    binance_futures_collector = BinanceFuturesCollector(binance_futures_api, market_repo_binance_futures, exchanges_repo)
     kucoin_collector = KuCoinCollector(kucoin_api, market_repo_kucoin, exchanges_repo)
     
     try:
@@ -66,6 +72,7 @@ async def main():
         logger.info("Начинаем сбор данных (параллельно)")
         await asyncio.gather(
             binance_collector.collect_data(),
+            binance_futures_collector.collect_data(),
             kucoin_collector.collect_data()
         )
         
@@ -75,12 +82,12 @@ async def main():
         logger.info(f"Извлечено уникальных валют: {len(unique_currencies)}")
         
         logger.info("Заполняем таблицу валют")
-        currencies_repo.populate_currencies_table(unique_currencies)
+        currencies_repo.populate_currencies_table(list(unique_currencies))
         logger.info("Таблица валют успешно заполнена")
         
         # Создаем и заполняем таблицу unique_trading_pairs
         logger.info("Извлекаем уникальные торговые пары")
-        trading_tables = ["binance_trading_pairs", "kucoin_trading_pairs"]
+        trading_tables = ["binance_trading_pairs", "binance_futures_trading_pairs", "kucoin_trading_pairs"]
         unique_pairs = trading_pairs_repo.extract_unique_trading_pairs(trading_tables)
         logger.info(f"Извлечено уникальных торговых пар: {len(unique_pairs)}")
         
@@ -91,12 +98,14 @@ async def main():
         # Обновляем currency_id в таблицах trading_pairs
         logger.info("Обновляем ID валют в таблицах торговых пар")
         market_repo_binance.update_currency_ids()
+        market_repo_binance_futures.update_currency_ids()
         market_repo_kucoin.update_currency_ids()
         logger.info("ID валют успешно обновлены")
 
         # Обновляем pair_id в таблицах trading_pairs
         logger.info("Обновляем ID торговых пар в таблицах")
         market_repo_binance.update_pair_ids()
+        market_repo_binance_futures.update_pair_ids()
         market_repo_kucoin.update_pair_ids()
         logger.info("ID торговых пар успешно обновлены")
 
@@ -110,15 +119,16 @@ async def main():
             cycle_start = time.time()
             
             # Параллельный сбор данных с обеих бирж
-            logger.debug("Параллельный сбор данных с Binance и KuCoin")
+            logger.debug("Параллельный сбор данных с Binance, Binance Futures и KuCoin")
             results = await asyncio.gather(
                 binance_collector.collect_data(),
+                binance_futures_collector.collect_data(),
                 kucoin_collector.collect_data(),
                 return_exceptions=True
             )
             
             # Обрабатываем результаты для каждой биржи
-            for exchange_name, result in zip(["Binance", "KuCoin"], results):
+            for exchange_name, result in zip(["Binance", "Binance Futures", "KuCoin"], results):
                 request_time = (time.time() - cycle_start) * 1000  # в миллисекундах
                 if isinstance(result, Exception):
                     logger.error(f"Ошибка при сборе данных с {exchange_name}: {str(result)}")
@@ -143,6 +153,7 @@ async def main():
         logger.info("Завершение работы, закрытие ресурсов...")
         await health_monitor.stop_monitoring()
         await binance_api.close_session()
+        await binance_futures_api.close_session()
         await kucoin_api.close_session()
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")

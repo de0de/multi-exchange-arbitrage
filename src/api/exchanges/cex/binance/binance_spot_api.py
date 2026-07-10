@@ -26,24 +26,31 @@ class BinanceSpotAPI(BaseExchangeAPI):
             price_data = await self._make_request('GET', '/api/v3/ticker/24hr')
             pairs = []
             for pair_data in price_data:
-                if pair_data['symbol'] in symbols:
+                symbol = pair_data['symbol']
+                if symbol not in symbols:
+                    continue
+                try:
+                    book = book_dict[symbol]
                     timestamp = datetime.now().timestamp()
                     readable_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
                     pairs.append(PairData(
                         exchange=self.EXCHANGE_NAME,
-                        original_pair=pair_data['symbol'],
-                        standardized_pair=pair_data['symbol'],
-                        base_currency=symbols[pair_data['symbol']]['baseAsset'],
-                        quote_currency=symbols[pair_data['symbol']]['quoteAsset'],
+                        original_pair=symbol,
+                        standardized_pair=symbol,
+                        base_currency=symbols[symbol]['baseAsset'],
+                        quote_currency=symbols[symbol]['quoteAsset'],
                         price=float(pair_data['lastPrice']),
                         volume=float(pair_data['volume']),
-                        bid=float(book_dict[pair_data['symbol']]['bidPrice']),
-                        ask=float(book_dict[pair_data['symbol']]['askPrice']),
-                        bid_volume=float(book_dict[pair_data['symbol']]['bidQty']),
-                        ask_volume=float(book_dict[pair_data['symbol']]['askQty']),
+                        bid=float(book['bidPrice']),
+                        ask=float(book['askPrice']),
+                        bid_volume=float(book['bidQty']),
+                        ask_volume=float(book['askQty']),
                         timestamp=timestamp,
                         readable_time=readable_time
                     ))
+                except (KeyError, ValueError) as e:
+                    self.logger.warning(f"Пропущена пара {symbol}: {e}")
+                    continue
             self.logger.info(f"Successfully fetched {len(pairs)} trading pairs")
             return pairs
         except Exception as e:

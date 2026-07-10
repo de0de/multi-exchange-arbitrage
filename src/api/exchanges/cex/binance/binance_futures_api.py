@@ -2,11 +2,10 @@ from src.api.exchanges.cex.base_cex_exchange import BaseExchangeAPI
 from src.core.models.pair_data import PairData
 from typing import List
 from datetime import datetime
-from src.api.exchanges.cex.kucoin.kucoin_constants import BASE_URL, EXCHANGE_NAME, ENDPOINTS
 
-class KuCoinSpotAPI(BaseExchangeAPI):
-    BASE_URL = BASE_URL
-    EXCHANGE_NAME = EXCHANGE_NAME
+class BinanceFuturesAPI(BaseExchangeAPI):
+    BASE_URL = "https://fapi.binance.com"
+    EXCHANGE_NAME = "Binance Futures"
 
     def __init__(self):
         super().__init__(None, None)  # Публичные данные не требуют ключей
@@ -14,35 +13,38 @@ class KuCoinSpotAPI(BaseExchangeAPI):
     async def fetch_trading_pairs(self) -> List[PairData]:
         await self.init_session()
         try:
-            exchange_info = await self._make_request('GET', ENDPOINTS['exchange_info'])
+            exchange_info = await self._make_request('GET', '/fapi/v1/exchangeInfo')
             self.logger.debug(f"Exchange info response: {exchange_info}")
 
-            if 'data' not in exchange_info:
-                self.logger.error("Key 'data' not found in exchange info response")
+            if 'symbols' not in exchange_info:
+                self.logger.error("Key 'symbols' not found in exchange info response")
                 return []
 
-            symbols = {s['symbol']: s for s in exchange_info['data'] if s['enableTrading']}
-            ticker_data = await self._make_request('GET', ENDPOINTS['ticker'])
+            symbols = {s['symbol']: s for s in exchange_info['symbols'] if s['status'] == 'TRADING'}
+            book_tickers = await self._make_request('GET', '/fapi/v1/ticker/bookTicker')
+            book_dict = {t['symbol']: t for t in book_tickers}
+            price_data = await self._make_request('GET', '/fapi/v1/ticker/24hr')
             pairs = []
-            for pair_data in ticker_data['data']['ticker']:
+            for pair_data in price_data:
                 symbol = pair_data['symbol']
                 if symbol not in symbols:
                     continue
                 try:
+                    book = book_dict[symbol]
                     timestamp = datetime.now().timestamp()
                     readable_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
                     pairs.append(PairData(
                         exchange=self.EXCHANGE_NAME,
                         original_pair=symbol,
-                        standardized_pair=symbol.replace('-', ''),
-                        base_currency=symbols[symbol]['baseCurrency'],
-                        quote_currency=symbols[symbol]['quoteCurrency'],
-                        price=float(pair_data['last']),
-                        volume=float(pair_data['vol']),
-                        bid=float(pair_data['buy']),
-                        ask=float(pair_data['sell']),
-                        bid_volume=float(pair_data['vol']),
-                        ask_volume=float(pair_data['vol']),
+                        standardized_pair=symbol,
+                        base_currency=symbols[symbol]['baseAsset'],
+                        quote_currency=symbols[symbol]['quoteAsset'],
+                        price=float(pair_data['lastPrice']),
+                        volume=float(pair_data['volume']),
+                        bid=float(book['bidPrice']),
+                        ask=float(book['askPrice']),
+                        bid_volume=float(book['bidQty']),
+                        ask_volume=float(book['askQty']),
                         timestamp=timestamp,
                         readable_time=readable_time
                     ))

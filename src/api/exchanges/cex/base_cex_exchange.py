@@ -3,7 +3,8 @@ import logging
 import hmac
 import hashlib
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from aiohttp import ClientTimeout
 from src.utils.retry import async_retry
 from src.utils.health_monitor import health_monitor
 
@@ -11,7 +12,7 @@ class BaseExchangeAPI:
     BASE_URL = ""
     EXCHANGE_NAME = ""
 
-    def __init__(self, api_key: str = None, secret_key: str = None):
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.session = None
@@ -36,9 +37,12 @@ class BaseExchangeAPI:
         exceptions=(aiohttp.ClientError, TimeoutError, ConnectionError),
         error_message="Ошибка при выполнении API-запроса"
     )
-    async def _make_request(self, method: str, endpoint: str, params: Dict[str, Any] = None, auth_required: bool = False) -> Dict[str, Any]:
+    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, auth_required: bool = False) -> Dict[str, Any]:
         url = f"{self.BASE_URL}{endpoint}"
         params = params or {}
+        if self.session is None:
+            await self.init_session()
+        assert self.session is not None, "Session was not initialized"
         headers = {}
         start_time = time.time()
         success = False
@@ -53,7 +57,8 @@ class BaseExchangeAPI:
             headers['X-MBX-APIKEY'] = self.api_key
 
         try:
-            async with self.session.request(method, url, params=params, headers=headers, timeout=10) as response:
+            timeout = ClientTimeout(total=10)
+            async with self.session.request(method, url, params=params, headers=headers, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.json()
                     success = True
