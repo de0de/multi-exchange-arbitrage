@@ -34,6 +34,7 @@ multi-exchange-arbitrage/
 │   │       └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
 │   ├── core/models/
 │   │   ├── pair_data.py             # PairData: цена, объём, bid/ask, метка времени
+│   │   ├── order_book_data.py       # OrderBookData, OrderBookLevel — depth стакана
 │   │   ├── currencies.py            # Currency
 │   │   └── exchanges.py             # Exchange (name, maker_fee, taker_fee)
 │   ├── data/collectors/cex/          # Сборщики данных (API → БД)
@@ -41,10 +42,13 @@ multi-exchange-arbitrage/
 │   │   ├── binance_collector.py     # Binance: fetch → save_trading_pairs
 │   │   ├── binance_futures_collector.py # Binance Futures
 │   │   ├── kucoin_collector.py      # KuCoin Spot
-│   │   └── kucoin_futures_collector.py # KuCoin Futures
+│   │   ├── kucoin_futures_collector.py # KuCoin Futures
+│   │   └── order_book_collector.py  # Order Book depth (универсальный, duck-typing)
 │   ├── database/
 │   │   ├── base_repository.py       # Абстрактный репозиторий
 │   │   ├── market_repository.py     # {exchange}_trading_pairs (UPSERT)
+│   │   ├── order_book_repository.py # {exchange}_order_book (top-20 уровней, UPSERT)
+│   │   ├── funding_rate_repository.py # {exchange}_funding_rates
 │   │   ├── currencies_repository.py # Справочник валют
 │   │   ├── exchanges_repository.py  # Справочник бирж (с комиссиями)
 │   │   └── trading_pairs_repository.py # unique_pairs (дедупликация)
@@ -93,11 +97,14 @@ main()
 │
 ├── [main loop — каждые 5 секунд]
 │   ├── binance_collector.collect_data()
-│   ├── health_monitor.record_request("Binance", ...)
+│   │   └── health_monitor.record_request("Binance", ...)
 │   ├── kucoin_collector.collect_data()
-│   ├── health_monitor.record_request("KuCoin", ...)
+│   │   └── health_monitor.record_request("KuCoin", ...)
 │   ├── kucoin_futures_collector.collect_data()
-│   ├── health_monitor.record_request("KuCoin Futures", ...)
+│   │   └── health_monitor.record_request("KuCoin Futures", ...)
+│   ├── binance_futures_api.fetch_funding_rates() → funding_repo_binance_futures.save_funding_rates()
+│   ├── kucoin_futures_api.fetch_funding_rates() → funding_repo_kucoin_futures.save_funding_rates()
+│   ├── [Order Book depth — выделенный компонент, не в цикле]
 │   └── sleep до следующего цикла
 │
 └── [shutdown]
@@ -133,7 +140,7 @@ CREATE TABLE unique_pairs (
     standardized_pair TEXT UNIQUE NOT NULL
 );
 
---Торговые пары для каждой биржи (динамическое имя таблицы)
+-- Торговые пары для каждой биржи (динамическое имя таблицы)
 CREATE TABLE {exchange}_trading_pairs (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     exchange_id        INTEGER,
@@ -157,6 +164,20 @@ CREATE TABLE {exchange}_trading_pairs (
     lot_size           REAL,
     FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
     FOREIGN KEY (pair_id) REFERENCES unique_pairs(id),
+    UNIQUE(exchange_id, original_pair)
+);
+
+-- Order Book depth (top-20 уровней, динамическое имя таблицы)
+CREATE TABLE {exchange}_order_book (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange_id        INTEGER,
+    original_pair      TEXT,
+    standardized_pair  TEXT,
+    bids               TEXT,   -- JSON: [{"price": ..., "volume": ...}, ...]
+    asks               TEXT,   -- JSON: [{"price": ..., "volume": ...}, ...]
+    timestamp          REAL,
+    readable_time      TEXT,
+    FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
     UNIQUE(exchange_id, original_pair)
 );
 ```
@@ -201,7 +222,7 @@ CREATE TABLE {exchange}_trading_pairs (
    - В секции первичного сбора: `await exchange_collector.collect_data()`
    - В цикле: try/except с `health_monitor.record_request()`
 
-4. **Обновить список `trading_tables`** в main.py (строка 81): добавить `"{exchange}_trading_pairs"`
+4. **Обновить список `trading_tables`** в main.py: добавить `"{exchange}_trading_pairs"`
 
 ### Что происходит автоматически:
 - Таблица `{exchange}_trading_pairs` создаётся при первом вызове `MarketRepository`
@@ -215,28 +236,29 @@ CREATE TABLE {exchange}_trading_pairs (
 
 ### 5.1. Приоритет (краткосрочный)
 - [x] **Параллельный сбор данных через `asyncio.gather()`** — Binance и KuCoin опрашиваются одновременно, временной сдвиг между ценами устранён.
-  ```python
-  await asyncio.gather(
-      binance_collector.collect_data(),
-      kucoin_collector.collect_data()
-  )
-  ```
-  **Приоритет: наивысший**, реализуется быстро.
-
 - [x] **Фьючерсные данные (Binance Futures)** — добавлен сбор фьючерсных котировок (702 пары).
-
-- [x] **Фьючерсные данные (KuCoin Futures)** — добавлен сбор фьючерсных котировок KuCoin (контракты + allTickers).
-  Таблица `kucoin_futures_trading_pairs`, поля `multiplier`/`lot_size` в `PairData`.
-
-- [ ] **Фьючерсные данные — доработки:**
-  - [ ] **Funding Rate** — сбор funding rate для фьючерсных пар (Binance `/fapi/v1/fundingRate`, KuCoin `/api/v1/funding-rate`). Funding rate — прямой компонент прибыли/убытка в funding-арбитражной стратегии (списывается/насчисляется каждые 8 часов).
-  - [ ] **Полный ордербук (depth)** — эндпоинты глубины стакана для расчёта проскальзывания.
+- [x] **Фьючерсные данные (KuCoin Futures)** — добавлен сбор фьючерсных котировок KuCoin (контракты + allTickers). Таблица `kucoin_futures_trading_pairs`, поля `multiplier`/`lot_size` в `PairData`.
+- [x] **Funding Rate** — сбор funding rate для фьючерсных пар:
+  - Binance Futures: `GET /fapi/v1/premiumIndex`
+  - KuCoin Futures: данные из кеша `_contracts_cache` (поле `fundingFeeRate` из `/api/v1/contracts/active`), без отдельного эндпоинта
+- [x] **Order Book depth (top-20)** — эндпоинты глубины стакана для расчёта проскальзывания. Реализовано:
+  - **Модель** `OrderBookData` / `OrderBookLevel` (`src/core/models/order_book_data.py`)
+  - **Репозиторий** `OrderBookRepository` (`src/database/order_book_repository.py`) — таблицы `{exchange}_order_book`, хранит top-20 уровней как JSON (UPSERT)
+  - **fetch_order_book(symbol, limit)** — во всех 4 API (Binance Spot, Binance Futures, KuCoin Spot, KuCoin Futures)
+  - **OrderBookCollector** (`src/data/collectors/cex/order_book_collector.py`) — универсальный сборщик с duck-typing, два метода: `collect_order_books()` (одинаковый список символов для всех бирж), `collect_top_pairs()` (разные списки символов для разных бирж)
+  - **Проверено** на 4 биржах для BTCUSDT — depth собирается и сохраняется корректно
+  - **KuCoin Spot** — поправлена структура ответа (`data['data']`)
+  - **KuCoin Futures** — создан с нуля, работает, стандартизация XBTUSD → BTCUSD
+  - **Не интегрировано в main.py** — текущий main.py не использует `OrderBookCollector`
+  - **Ограничение:** `collect_top_pairs()` собирает только указанные пользователем пары, не топ-N по объёму. Для полноценного "топ-50 пар по объёму" нужен дополнительный анализ.
 
 - [ ] **Копитрейдинг из Telegram/Discord** — модуль распознавания торговых сигналов из каналов. Сигналы приходят в двух форматах:
   - **Текстовые сообщения** (например: "LONG BTC entry 65000 SL 64000 TP 67000") — обрабатываются обычной text-моделью (DeepSeek V4 Flash), без vision.
   - **Скриншоты с бирж** — обрабатываются vision-capable LLM API (DeepSeek Vision / Qwen3-VL / GLM-4.6V).
   - Модуль сам определяет тип входящего сообщения (наличие изображения vs только текст) и направляет в соответствующий обработчик. Промпт в обоих случаях возвращает строгий JSON единого формата (`symbol`, `side`, `entry`, `SL`, `TP`), чтобы дальнейшая логика бота не зависела от источника сигнала.
   - Не требует локальной модели — объём сообщений низкий, экономия на облачном API незначительна.
+
+- [ ] **Интеграция Order Book depth в main.py** — добавить `OrderBookCollector` и циклический сбор depth для ключевых пар (например, BTCUSDT, ETHUSDT) параллельно с основным сбором данных.
 
 - [ ] **WebSocket** — замена REST polling (5 сек) на real-time стримы (Binance WebSocket, KuCoin WebSocket).
 
@@ -269,6 +291,7 @@ CREATE TABLE {exchange}_trading_pairs (
   - Поиск расхождений цен (с учётом комиссий)
   - Расчёт потенциальной прибыли
   - Фильтрация по минимальному объёму
+  - Учёт проскальзывания на основе Order Book depth
 - [ ] **Управление балансами:**
   - Поддержка приватных API-ключей для торговли
   - Отслеживание балансов на биржах
@@ -288,7 +311,7 @@ CREATE TABLE {exchange}_trading_pairs (
   - Перехода с REST polling на WebSocket (частота записи вырастет на порядок)
   - Масштабирования до 5+ бирж
   - Появления потребности в сложных аналитических запросах (оконные функции, JOIN по времени)
-  
+
   До наступления этих условий миграция добавит сложность (отдельный сервер БД, управление соединениями, миграции схемы) без выигрыша в производительности.
 
 ---
@@ -301,45 +324,36 @@ CREATE TABLE {exchange}_trading_pairs (
 - **Одно соединение БД:** `sqlite3` не поддерживает конкурентные записи. Всё выполняется последовательно в одном `asyncio`-потоке.
 - **Логи:** ротация 10 МБ, хранится 10 файлов. Логи пишутся в `logs/arbitrage_YYYY-MM-DD.log`.
 - **Standardized pairs:** Binance использует `ETHBTC`, KuCoin может использовать `ETH-BTC`. Collector приводит к единому формату `ETHBTC`.
+- **KuCoin Futures mark_price:** Источником цены для KuCoin Futures является эндпоинт `allTickers` (а не отдельный тикерный эндпоинт). `mark_price` из `allTickers` может отличаться от цен Binance Futures на ~0.5–1% из-за разных ставок финансирования и ликвидности на отдельных фьючерсных биржах. Это не баг, а суть арбитражной возможности.
+- **KuCoin Futures symbol:** spot-формат `BTC-USDT` (с дефисом), futures-формат `XBTUSDTM` (XBT вместо BTC).
+- **KuCoin Spot depth:** ответ от `/api/v1/market/orderbook/level2_20` приходит в `data['data']`, а не на корневом уровне.
+- **OrderBookRepository:** не интегрирован в `main.py`, живёт как отдельный компонент.
 
 ---
 
 ## 6.1. Git-workflow
 
-- **Cline НЕ выполняет НИКАКИЕ git-команды самостоятельно через терминал** — ни commit, 
-  ни push, ни merge, ни даже git status/git log. Известный баг терминала (PSReadLine/ 
-  shell integration) вызывает зависание на любой git-команде, не только на commit.
+- **Cline НЕ выполняет НИКАКИЕ git-команды самостоятельно через терминал** — ни commit, ни push, ни merge, ни даже git status/git log. Известный баг терминала (PSReadLine/shell integration) вызывает зависание на любой git-команде, не только на commit.
 - Вместо выполнения git-команд, Cline:
   - Сообщает, когда задача завершена и протестирована, и что пора закоммитить
   - Предлагает готовый commit message
   - Указывает точную команду для ручного выполнения (см. CHEATSHEET.md)
-  - Даёт совет по следующему шагу разработки, не дожидаясь выполнения git-команды 
-    от пользователя — пользователь сообщит о результате в следующем сообщении
-  - НЕ пытается сам проверить git status/git log после — просто спрашивает пользователя 
-    "готово?" или ждёт следующего сообщения с результатом
-- Все git-операции (commit, push, merge, status, log) пользователь выполняет вручную 
-  в своём терминале, используя CHEATSHEET.md как справочник.
+  - Даёт совет по следующему шагу разработки, не дожидаясь выполнения git-команды от пользователя — пользователь сообщит о результате в следующем сообщении
+  - НЕ пытается сам проверить git status/git log после — просто спрашивает пользователя "готово?" или ждёт следующего сообщения с результатом
+- Все git-операции (commit, push, merge, status, log) пользователь выполняет вручную в своём терминале, используя CHEATSHEET.md как справочник.
 
-- Коммитить нужно по завершении каждой логически законченной единицы работы 
-  (например, отдельно "добавлен Binance Futures API-клиент", отдельно "добавлен 
-  Futures Collector", отдельно "интеграция в main.py"), а не всей сессии скопом. 
-  Это позволяет откатить конкретный шаг при проблеме, не теряя прогресс сессии.
+- Коммитить нужно по завершении каждой логически законченной единицы работы (например, отдельно "добавлен Binance Futures API-клиент", отдельно "добавлен Futures Collector", отдельно "интеграция в main.py"), а не всей сессии скопом. Это позволяет откатить конкретный шаг при проблеме, не теряя прогресс сессии.
 
-- При прерывании сессии на середине задачи — дописывать короткую пометку под 
-  соответствующим пунктом в разделе 5.1, например:
-  
+- При прерывании сессии на середине задачи — дописывать короткую пометку под соответствующим пунктом в разделе 5.1, например:
+
   > В процессе: API-клиент готов, Collector — нет, интеграция в main.py — нет
-  
-  PLAN.md является единственным источником правды о состоянии проекта. 
+
+  PLAN.md является единственным источником правды о состоянии проекта.
 
 ### 6.2. Формат задач для Cline
 
-- **Точечные правки существующих файлов** (конфиги, PLAN.md, мелкие фиксы) — пользователь 
-  даёт точную спецификацию (что менять → куда вставить → точный текст), Cline выполняет 
-  буквально.
-- **Разработка нового функционала с нуля** (новая биржа, новый модуль) — пользователь даёт 
-  краткое ТЗ (что нужно получить в результате), Cline сам предлагает реализацию по шаблону 
-  из раздела 4 PLAN.md, а пользователь ревьюит готовый результат, а не диктует код заранее.
+- **Точечные правки существующих файлов** (конфиги, PLAN.md, мелкие фиксы) — пользователь даёт точную спецификацию (что менять → куда вставить → точный текст), Cline выполняет буквально.
+- **Разработка нового функционала с нуля** (новая биржа, новый модуль) — пользователь даёт краткое ТЗ (что нужно получить в результате), Cline сам предлагает реализацию по шаблону из раздела 4 PLAN.md, а пользователь ревьюит готовый результат, а не диктует код заранее.
 - **Практика ревью** — при завершении задачи полезно кратко проверить:
   - Есть ли скрытые риски (обработка ошибок, edge cases), не упомянутые в задаче
   - Есть ли важные нюансы вне исходного ТЗ (разница комиссий, funding rate)

@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import signal
 import time
+
 from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
 from src.api.exchanges.cex.binance.binance_futures_api import BinanceFuturesAPI
 from src.api.exchanges.cex.kucoin.kucoin_spot_api import KuCoinSpotAPI
@@ -12,6 +13,7 @@ from src.data.collectors.cex.binance_futures_collector import BinanceFuturesColl
 from src.data.collectors.cex.kucoin_collector import KuCoinCollector
 from src.data.collectors.cex.kucoin_futures_collector import KuCoinFuturesCollector
 from src.database.market_repository import MarketRepository
+from src.database.funding_rate_repository import FundingRateRepository
 from src.database.currencies_repository import CurrenciesRepository
 from src.database.exchanges_repository import ExchangesRepository
 from src.database.trading_pairs_repository import TradingPairsRepository
@@ -57,6 +59,8 @@ async def main():
     market_repo_binance_futures = MarketRepository(db_path, "binance_futures")
     market_repo_kucoin = MarketRepository(db_path, "kucoin")
     market_repo_kucoin_futures = MarketRepository(db_path, "kucoin_futures")
+    funding_repo_binance_futures = FundingRateRepository(db_path, "binance_futures")
+    funding_repo_kucoin_futures = FundingRateRepository(db_path, "kucoin_futures")
     currencies_repo = CurrenciesRepository(conn)
     exchanges_repo = ExchangesRepository(db_path)
     trading_pairs_repo = TradingPairsRepository(conn)
@@ -121,7 +125,7 @@ async def main():
 
         # Интервал обновления в секундах
         update_interval = 5
-        
+
         logger.info(f"Инициализация завершена за {time.time() - start_time:.2f} сек. Начинаем циклический сбор данных.")
         
         # Основной цикл сбора данных
@@ -146,6 +150,20 @@ async def main():
                     health_monitor.record_request(exchange_name, False, 0, str(result))
                 else:
                     health_monitor.record_request(exchange_name, True, request_time)
+
+            # Сбор funding rate (только futures биржи)
+            logger.debug("Сбор funding rate с Futures бирж")
+            funding_tasks = []
+
+            bf_funding = await binance_futures_api.fetch_funding_rates()
+            if bf_funding:
+                funding_repo_binance_futures.save_funding_rates(bf_funding)
+                logger.debug(f"Saved {len(bf_funding)} funding rates from Binance Futures")
+
+            kf_funding = await kucoin_futures_api.fetch_funding_rates()
+            if kf_funding:
+                funding_repo_kucoin_futures.save_funding_rates(kf_funding)
+                logger.debug(f"Saved {len(kf_funding)} funding rates from KuCoin Futures")
             
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start
@@ -167,6 +185,8 @@ async def main():
         await binance_futures_api.close_session()
         await kucoin_api.close_session()
         await kucoin_futures_api.close_session()
+        funding_repo_binance_futures.close()
+        funding_repo_kucoin_futures.close()
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")
 

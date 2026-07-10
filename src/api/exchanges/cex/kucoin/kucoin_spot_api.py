@@ -1,8 +1,10 @@
 from src.api.exchanges.cex.base_cex_exchange import BaseExchangeAPI
 from src.core.models.pair_data import PairData
+from src.core.models.order_book_data import OrderBookData, OrderBookLevel
 from typing import List
 from datetime import datetime
 from src.api.exchanges.cex.kucoin.kucoin_constants import BASE_URL, EXCHANGE_NAME, ENDPOINTS
+
 
 class KuCoinSpotAPI(BaseExchangeAPI):
     BASE_URL = BASE_URL
@@ -54,3 +56,49 @@ class KuCoinSpotAPI(BaseExchangeAPI):
         except Exception as e:
             self.logger.error(f"Error fetching trading pairs: {e}")
             return []
+
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> OrderBookData:
+        """
+        Возвращает order book depth для указанного символа KuCoin Spot.
+
+        KuCoin имеет готовый эндпоинт для 20 уровней:
+        GET /api/v1/market/orderbook/level2_20?symbol={symbol}
+
+        Документация: https://www.kucoin.com/docs/rest/spot-trading/market-data/get-part-order-book-aggregated
+        """
+        await self.init_session()
+        try:
+            data = await self._make_request('GET', '/api/v1/market/orderbook/level2_20', params={
+                'symbol': symbol
+            })
+
+            now = datetime.now().timestamp()
+            readable = datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M:%S')
+
+            # Ответ KuCoin Spot: {"code":"200000", "data": {"bids": [...], "asks": [...]}}
+            inner = data.get('data', {})
+            raw_bids = inner.get('bids', [])
+            raw_asks = inner.get('asks', [])
+
+            # Формат KuCoin: [["price", "size"], ...]
+            bids = [OrderBookLevel(price=float(p[0]), volume=float(p[1])) for p in raw_bids]
+            asks = [OrderBookLevel(price=float(p[0]), volume=float(p[1])) for p in raw_asks]
+
+            return OrderBookData(
+                exchange=self.EXCHANGE_NAME,
+                original_pair=symbol,
+                standardized_pair=symbol.replace('-', ''),
+                bids=bids,
+                asks=asks,
+                timestamp=now,
+                readable_time=readable
+            )
+        except Exception as e:
+            self.logger.error(f"Error fetching order book for {symbol}: {e}")
+            return OrderBookData(
+                exchange=self.EXCHANGE_NAME,
+                original_pair=symbol,
+                standardized_pair=symbol.replace('-', ''),
+                bids=[],
+                asks=[]
+            )

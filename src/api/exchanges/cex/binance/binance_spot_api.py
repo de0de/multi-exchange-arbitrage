@@ -1,5 +1,6 @@
 from src.api.exchanges.cex.base_cex_exchange import BaseExchangeAPI
 from src.core.models.pair_data import PairData
+from src.core.models.order_book_data import OrderBookData, OrderBookLevel
 from typing import List
 from datetime import datetime
 
@@ -56,3 +57,43 @@ class BinanceSpotAPI(BaseExchangeAPI):
         except Exception as e:
             self.logger.error(f"Error fetching trading pairs: {e}")
             return []
+
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> OrderBookData:
+        """
+        Возвращает order book depth для указанного символа Binance Spot.
+
+        GET /api/v3/depth?symbol={symbol}&limit={limit}
+        Документация: https://binance-docs.github.io/apidocs/spot/en/#order-book
+        """
+        await self.init_session()
+        try:
+            data = await self._make_request('GET', '/api/v3/depth', params={
+                'symbol': symbol,
+                'limit': limit
+            })
+
+            now = datetime.now().timestamp()
+            readable = datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M:%S')
+
+            bids = [OrderBookLevel(price=float(p[0]), volume=float(p[1])) for p in data.get('bids', [])]
+            asks = [OrderBookLevel(price=float(p[0]), volume=float(p[1])) for p in data.get('asks', [])]
+
+            return OrderBookData(
+                exchange=self.EXCHANGE_NAME,
+                original_pair=symbol,
+                standardized_pair=symbol,
+                bids=bids,
+                asks=asks,
+                timestamp=now,
+                readable_time=readable
+            )
+        except Exception as e:
+            self.logger.error(f"Error fetching order book for {symbol}: {e}")
+            # Возвращаем пустой стакан
+            return OrderBookData(
+                exchange=self.EXCHANGE_NAME,
+                original_pair=symbol,
+                standardized_pair=symbol,
+                bids=[],
+                asks=[]
+            )
