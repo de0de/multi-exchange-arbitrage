@@ -41,8 +41,8 @@ D:\multi-exchange-arbitrage\venv\Scripts\pip.exe install -r requirements.txt
 **Быстрый тест (создать tmp_test_*.py и запустить):**
 D:\multi-exchange-arbitrage\venv\Scripts\python.exe tmp_test_название.py
 
-**Просмотр лога:**
-Get-Content D:\multi-exchange-arbitrage\logs\arbitrage_2026-07-09.log -Tail 50
+**Просмотр последнего лога:**
+Get-Content (Get-ChildItem D:\multi-exchange-arbitrage\logs\*.log | Sort-Object LastWriteTime -Descending | Select-Object -First 1) -Tail 50
 
 **Активировать venv (если нужно):**
 .\venv\Scripts\activate
