@@ -1,7 +1,12 @@
 исходные коды/
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
 app.log
 git_команды
+data/*.db
+logs/
+tmp_test_*.py
+scratch_*.py
