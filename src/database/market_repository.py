@@ -14,11 +14,13 @@ class MarketRepository(BaseRepository):
         self.logger = logging.getLogger(__name__)
         self._connect()
         self._create_table()
+        self._migrate_existing_tables()
 
     def _connect(self):
         db_path = self.db_url.replace('sqlite:///', '')
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = sqlite3.connect(db_path)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
         self.cursor = self.conn.cursor()
 
     def _create_table(self):
@@ -40,6 +42,8 @@ class MarketRepository(BaseRepository):
                 ask REAL,
                 bid_volume REAL,
                 ask_volume REAL,
+                multiplier REAL DEFAULT 1.0,
+                lot_size REAL,
                 timestamp REAL,
                 readable_time TEXT,
                 FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
@@ -48,6 +52,17 @@ class MarketRepository(BaseRepository):
             )
         ''')
         self.conn.commit()
+
+    def _migrate_existing_tables(self):
+        """ALTER TABLE для существующих таблиц, созданных до добавления multiplier/lot_size."""
+        table_name = f"{self.exchange_name}_trading_pairs"
+        for column, col_type in [("multiplier", "REAL DEFAULT 1.0"), ("lot_size", "REAL")]:
+            try:
+                self.cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {col_type}")
+                self.conn.commit()
+                self.logger.info(f"Миграция {table_name}: добавлена колонка {column}")
+            except sqlite3.OperationalError:
+                pass  # колонка уже существует — это нормально
 
     def get_or_create_exchange_id(self, exchange_name: str) -> int:
         self.cursor.execute('SELECT id FROM exchanges WHERE name = ?', (exchange_name,))
@@ -67,24 +82,30 @@ class MarketRepository(BaseRepository):
                 UPDATE {table_name}
                 SET standardized_pair = ?, base_currency = ?, quote_currency = ?,
                     price = ?, volume = ?, bid = ?, ask = ?, bid_volume = ?, ask_volume = ?,
+                    multiplier = ?, lot_size = ?,
                     timestamp = ?, readable_time = ?
                 WHERE exchange_id = ? AND original_pair = ?
             ''', (
                 pair.standardized_pair, pair.base_currency, pair.quote_currency,
                 pair.price, pair.volume, pair.bid, pair.ask,
-                pair.bid_volume, pair.ask_volume, pair.timestamp, pair.readable_time,
+                pair.bid_volume, pair.ask_volume,
+                pair.multiplier, pair.lot_size,
+                pair.timestamp, pair.readable_time,
                 exchange_id, pair.original_pair
             ))
             if self.cursor.rowcount == 0:
                 self.cursor.execute(f'''
                     INSERT INTO {table_name} (
                         exchange_id, original_pair, standardized_pair, base_currency,
-                        quote_currency, price, volume, bid, ask, bid_volume, ask_volume, timestamp, readable_time
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        quote_currency, price, volume, bid, ask, bid_volume, ask_volume,
+                        multiplier, lot_size, timestamp, readable_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     exchange_id, pair.original_pair, pair.standardized_pair, pair.base_currency,
                     pair.quote_currency, pair.price, pair.volume, pair.bid, pair.ask,
-                    pair.bid_volume, pair.ask_volume, pair.timestamp, pair.readable_time
+                    pair.bid_volume, pair.ask_volume,
+                    pair.multiplier, pair.lot_size,
+                    pair.timestamp, pair.readable_time
                 ))
         self.conn.commit()
         self.logger.info(f"Updated {len(pairs)} trading pairs in the database")

@@ -30,7 +30,8 @@ multi-exchange-arbitrage/
 │   │   ├── binance/
 │   │   │   └── binance_spot_api.py  # Binance Spot (публичный, 1366 пар)
 │   │   └── kucoin/
-│   │       └── kucoin_spot_api.py   # KuCoin Spot (публичный, 1037 пар)
+│   │       ├── kucoin_spot_api.py   # KuCoin Spot (публичный, 1037 пар)
+│   │       └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
 │   ├── core/models/
 │   │   ├── pair_data.py             # PairData: цена, объём, bid/ask, метка времени
 │   │   ├── currencies.py            # Currency
@@ -38,7 +39,9 @@ multi-exchange-arbitrage/
 │   ├── data/collectors/cex/          # Сборщики данных (API → БД)
 │   │   ├── base_collector.py        # Абстрактный базовый класс
 │   │   ├── binance_collector.py     # Binance: fetch → save_trading_pairs
-│   │   └── kucoin_collector.py      # KuCoin: fetch → save_trading_pairs
+│   │   ├── binance_futures_collector.py # Binance Futures
+│   │   ├── kucoin_collector.py      # KuCoin Spot
+│   │   └── kucoin_futures_collector.py # KuCoin Futures
 │   ├── database/
 │   │   ├── base_repository.py       # Абстрактный репозиторий
 │   │   ├── market_repository.py     # {exchange}_trading_pairs (UPSERT)
@@ -63,8 +66,8 @@ multi-exchange-arbitrage/
 main()
 ├── setup_logging()
 ├── sqlite3.connect() → conn
-├── BinanceSpotAPI(), KuCoinSpotAPI()
-├── MarketRepository(db_path, "binance"), MarketRepository(db_path, "kucoin")
+├── BinanceSpotAPI(), BinanceFuturesAPI(), KuCoinSpotAPI(), KuCoinFuturesAPI()
+├── MarketRepository(db_path, "binance"), MarketRepository(db_path, "binance_futures"), MarketRepository(db_path, "kucoin"), MarketRepository(db_path, "kucoin_futures")
 ├── CurrenciesRepository(conn)
 ├── ExchangesRepository(db_path)
 ├── TradingPairsRepository(conn)
@@ -79,6 +82,7 @@ main()
 │   │   │   └── _make_request("GET", "/api/v3/ticker/24hr")
 │   │   └── market_repo.save_trading_pairs(pairs)  # UPSERT
 │   ├── kucoin_collector.collect_data()          # аналогично
+│   ├── kucoin_futures_collector.collect_data()   # KuCoin Futures (contracts/active + allTickers)
 │   ├── currencies_repo.extract_unique_currencies()
 │   ├── currencies_repo.populate_currencies_table()
 │   ├── trading_pairs_repo.extract_unique_trading_pairs()
@@ -92,12 +96,16 @@ main()
 │   ├── health_monitor.record_request("Binance", ...)
 │   ├── kucoin_collector.collect_data()
 │   ├── health_monitor.record_request("KuCoin", ...)
+│   ├── kucoin_futures_collector.collect_data()
+│   ├── health_monitor.record_request("KuCoin Futures", ...)
 │   └── sleep до следующего цикла
 │
 └── [shutdown]
     ├── health_monitor.stop_monitoring()
     ├── binance_api.close_session()
+    ├── binance_futures_api.close_session()
     ├── kucoin_api.close_session()
+    ├── kucoin_futures_api.close_session()
     └── conn.close()
 ```
 
@@ -144,6 +152,9 @@ CREATE TABLE {exchange}_trading_pairs (
     ask_volume         REAL,
     timestamp          REAL,
     readable_time      TEXT,
+    -- Фьючерсные поля (опционально, NULL для спотовых пар)
+    multiplier         REAL,
+    lot_size           REAL,
     FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
     FOREIGN KEY (pair_id) REFERENCES unique_pairs(id),
     UNIQUE(exchange_id, original_pair)
@@ -214,10 +225,12 @@ CREATE TABLE {exchange}_trading_pairs (
 
 - [x] **Фьючерсные данные (Binance Futures)** — добавлен сбор фьючерсных котировок (702 пары).
 
+- [x] **Фьючерсные данные (KuCoin Futures)** — добавлен сбор фьючерсных котировок KuCoin (контракты + allTickers).
+  Таблица `kucoin_futures_trading_pairs`, поля `multiplier`/`lot_size` в `PairData`.
+
 - [ ] **Фьючерсные данные — доработки:**
-  - [ ] **Funding Rate** — сбор `/fapi/v1/fundingRate` для каждой пары (отдельное поле в таблице `binance_futures_trading_pairs`). Funding rate — прямой компонент прибыли/убытка в funding-арбитражной стратегии (списывается/насчисляется каждые 8 часов вне зависимости от размера позиции). На малых суммах абсолютные цифры копеечные, но для корректного расчёта доходности стратегии нужен всегда.
-  - [ ] **Полный ордербук (depth)** — эндпоинт `/fapi/v1/depth` для расчёта проскальзывания. Сейчас собирается только верхний уровень (best bid/ask). Глубина стакана становится критичной при росте размера позиции — проскальзывание может съесть прибыль.
-  - [ ] **KuCoin Futures** — добавить по аналогии с Binance Futures.
+  - [ ] **Funding Rate** — сбор funding rate для фьючерсных пар (Binance `/fapi/v1/fundingRate`, KuCoin `/api/v1/funding-rate`). Funding rate — прямой компонент прибыли/убытка в funding-арбитражной стратегии (списывается/насчисляется каждые 8 часов).
+  - [ ] **Полный ордербук (depth)** — эндпоинты глубины стакана для расчёта проскальзывания.
 
 - [ ] **Копитрейдинг из Telegram/Discord** — модуль распознавания торговых сигналов из каналов. Сигналы приходят в двух форматах:
   - **Текстовые сообщения** (например: "LONG BTC entry 65000 SL 64000 TP 67000") — обрабатываются обычной text-моделью (DeepSeek V4 Flash), без vision.

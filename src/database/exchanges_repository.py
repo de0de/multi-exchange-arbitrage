@@ -11,6 +11,7 @@ class ExchangesRepository:
             os.makedirs(db_dir, exist_ok=True)
 
         self.conn = sqlite3.connect(db_path)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
         self.cursor = self.conn.cursor()
         self.logger = logging.getLogger(__name__)
         self.create_table()

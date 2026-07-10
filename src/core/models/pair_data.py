@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class PairData:
     exchange: str
@@ -14,4 +15,6 @@ class PairData:
     bid_volume: float
     ask_volume: float
     timestamp: float
-    readable_time: str 
+    readable_time: str
+    multiplier: float = 1.0       # контрактный множитель (для фьючерсов), для спота = 1.0
+    lot_size: float | None = None  # минимальный размер позиции в контрактах (для фьючерсов)
