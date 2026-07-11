@@ -95,6 +95,40 @@ class OrderBookRepository:
             ))
         self.conn.commit()
 
+    def get_order_book_with_age(self, original_pair: str):
+        """
+        Возвращает (OrderBookData | None, age_seconds | None).
+        age_seconds = time.time() - timestamp записи.
+        Если записи нет — (None, None).
+        """
+        import json
+        import time
+
+        table_name = f"{self.exchange_name}_order_book"
+        self.cursor.execute(
+            f'''SELECT exchange_id, original_pair, standardized_pair, bids, asks, timestamp, readable_time
+                FROM {table_name} WHERE original_pair = ?''',
+            (original_pair,)
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None, None
+
+        bids = [OrderBookLevel(**lvl) for lvl in json.loads(row[3])]
+        asks = [OrderBookLevel(**lvl) for lvl in json.loads(row[4])]
+
+        ob = OrderBookData(
+            exchange=self.exchange_name,
+            original_pair=row[1],
+            standardized_pair=row[2],
+            bids=bids,
+            asks=asks,
+            timestamp=row[5],
+            readable_time=row[6]
+        )
+        age = time.time() - row[5]
+        return ob, age
+
     def save_order_books(self, order_books: List[OrderBookData]):
         """Сохраняет список order books."""
         for ob in order_books:

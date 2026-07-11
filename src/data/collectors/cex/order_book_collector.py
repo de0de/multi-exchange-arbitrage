@@ -39,6 +39,63 @@ class OrderBookCollector:
             raise ValueError("api должен иметь метод fetch_order_book(symbol, limit)")
         self._sources.append({'api': api, 'repo': repo})
 
+    async def get_order_book_cached(
+        self,
+        api,
+        repo: OrderBookRepository,
+        symbol: str,
+        ttl_seconds: float = 5.0
+    ) -> Optional[OrderBookData]:
+        """
+        Возвращает OrderBookData с DB-backed TTL-кешем.
+
+        - Если в таблице {exchange}_order_book есть свежая запись
+          (age < ttl_seconds от текущего момента) — возвращает её
+          без HTTP-запроса (cache hit с DEBUG-логированием).
+        - Иначе выполняет HTTP-запрос через api.fetch_order_book(),
+          сохраняет через repo.save_order_book(), возвращает данные
+          (cache miss с DEBUG-логированием).
+
+        Args:
+            api: объект с async def fetch_order_book(symbol) -> OrderBookData.
+            repo: OrderBookRepository для проверки кеша.
+            symbol: торговая пара.
+            ttl_seconds: время жизни кеша в секундах (по умолчанию 5).
+
+        Returns:
+            OrderBookData или None при ошибке.
+        """
+        exchange_name = getattr(api, 'EXCHANGE_NAME', type(api).__name__)
+
+        # Проверяем кеш
+        cached_ob, age = repo.get_order_book_with_age(symbol)
+        if cached_ob is not None and age is not None and age < ttl_seconds:
+            self.logger.debug(
+                f"Cache HIT  {exchange_name}/{symbol} "
+                f"(age={age:.1f}s < TTL={ttl_seconds}s)"
+            )
+            return cached_ob
+
+        self.logger.debug(
+            f"Cache MISS {exchange_name}/{symbol} (TTL={ttl_seconds}s)"
+        )
+
+        # Выполняем HTTP-запрос
+        try:
+            order_book = await api.fetch_order_book(symbol)
+        except Exception as e:
+            self.logger.error(
+                f"Ошибка при fetch_order_book({symbol}) с {exchange_name}: {e}"
+            )
+            return None
+
+        if order_book and order_book.bids:
+            repo.save_order_book(order_book)
+            return order_book
+
+        self.logger.warning(f"Пустой order book для {symbol} от {exchange_name}")
+        return order_book
+
     async def collect_order_books(self, symbols: List[str], limit: int = 20) -> int:
         """
         Собирает Order Book depth для каждого символа со всех зарегистрированных бирж.
