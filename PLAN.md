@@ -32,11 +32,14 @@ multi-exchange-arbitrage/
 │   │   └── kucoin/
 │   │       ├── kucoin_spot_api.py   # KuCoin Spot (публичный, 1037 пар)
 │   │       └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
-│   ├── core/models/
-│   │   ├── pair_data.py             # PairData: цена, объём, bid/ask, метка времени
-│   │   ├── order_book_data.py       # OrderBookData, OrderBookLevel — depth стакана
-│   │   ├── currencies.py            # Currency
-│   │   └── exchanges.py             # Exchange (name, maker_fee, taker_fee)
+│   ├── core/
+│   │   ├── spread_monitor.py           # Мониторинг спредов (spot-only, INSERT)
+│   │   └── models/
+│   │       ├── pair_data.py             # PairData: цена, объём, bid/ask, метка времени
+│   │       ├── order_book_data.py       # OrderBookData, OrderBookLevel — depth стакана
+│   │       ├── arbitrage_opportunity.py # ArbitrageOpportunity, SlippageInfo
+│   │       ├── currencies.py            # Currency
+│   │       └── exchanges.py             # Exchange (name, maker_fee, taker_fee)
 │   ├── data/collectors/cex/          # Сборщики данных (API → БД)
 │   │   ├── base_collector.py        # Абстрактный базовый класс
 │   │   ├── binance_collector.py     # Binance: fetch → save_trading_pairs
@@ -49,6 +52,7 @@ multi-exchange-arbitrage/
 │   │   ├── market_repository.py     # {exchange}_trading_pairs (UPSERT)
 │   │   ├── order_book_repository.py # {exchange}_order_book (top-20 уровней, UPSERT)
 │   │   ├── funding_rate_repository.py # {exchange}_funding_rates
+│   │   ├── arbitrage_opportunity_repository.py # arbitrage_opportunities (INSERT)
 │   │   ├── currencies_repository.py # Справочник валют
 │   │   ├── exchanges_repository.py  # Справочник бирж (с комиссиями)
 │   │   └── trading_pairs_repository.py # unique_pairs (дедупликация)
@@ -104,7 +108,15 @@ main()
 │   │   └── health_monitor.record_request("KuCoin Futures", ...)
 │   ├── binance_futures_api.fetch_funding_rates() → funding_repo_binance_futures.save_funding_rates()
 │   ├── kucoin_futures_api.fetch_funding_rates() → funding_repo_kucoin_futures.save_funding_rates()
-│   ├── [Order Book depth — выделенный компонент, не в цикле]
+│   ├── [spread monitor]
+│   │   ├── spread_monitor.scan() → List[ArbitrageOpportunity]
+│   │   │   ├── JOIN {exchange}_trading_pairs по standardized_pair
+│   │   │   ├── сравнение bid/ask с учётом комиссий (spot-only)
+│   │   │   ├── [COLLISION?]-проверка (спред ≥20% → разные токены)
+│   │   │   └── топ-N по net_spread, min_volume_usdt
+│   │   ├── для топ-кандидатов: _calc_slippage()
+│   │   │   └── order_book_collector.get_order_book_cached() — TTL 5 сек
+│   │   └── arbitrage_opportunity_repo.save_opportunities() — INSERT (накопление)
 │   └── sleep до следующего цикла
 │
 └── [shutdown]
@@ -140,7 +152,7 @@ CREATE TABLE unique_pairs (
     standardized_pair TEXT UNIQUE NOT NULL
 );
 
--- Торговые пары для каждой биржи (динамическое имя таблицы)
+-- Торговые пары для каждой биржи (динамическое имя таблицы, UPSERT)
 CREATE TABLE {exchange}_trading_pairs (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     exchange_id        INTEGER,
@@ -167,7 +179,7 @@ CREATE TABLE {exchange}_trading_pairs (
     UNIQUE(exchange_id, original_pair)
 );
 
--- Order Book depth (top-20 уровней, динамическое имя таблицы)
+-- Order Book depth (top-20 уровней, динамическое имя таблицы, UPSERT — TTL-кеш обновляет поверх)
 CREATE TABLE {exchange}_order_book (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     exchange_id        INTEGER,
@@ -179,6 +191,35 @@ CREATE TABLE {exchange}_order_book (
     readable_time      TEXT,
     FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
     UNIQUE(exchange_id, original_pair)
+);
+
+-- Арбитражные возможности (накопление, не UPSERT)
+CREATE TABLE arbitrage_opportunities (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    standardized_pair      TEXT NOT NULL,
+    base_currency          TEXT,
+    quote_currency         TEXT,
+    exchange_buy           TEXT NOT NULL,
+    exchange_sell          TEXT NOT NULL,
+    buy_price              REAL,
+    sell_price             REAL,
+    raw_spread_percent     REAL,
+    buy_exchange_fee_percent  REAL,
+    sell_exchange_fee_percent REAL,
+    net_spread_percent     REAL,
+    max_buy_volume_usdt    REAL,
+    max_sell_volume_usdt   REAL,
+    trade_volume_usdt      REAL,
+    buy_volume_original    REAL,
+    sell_volume_original   REAL,
+    slippage_available     INTEGER DEFAULT 0,
+    buy_slippage           TEXT,  -- JSON: SlippageInfo
+    sell_slippage          TEXT,  -- JSON: SlippageInfo
+    net_spread_with_slippage_percent REAL,
+    slippage_limited_volume_usdt REAL,
+    timestamp              REAL,
+    readable_time          TEXT,
+    suspected_collision    INTEGER DEFAULT 0
 );
 ```
 
@@ -249,7 +290,7 @@ CREATE TABLE {exchange}_order_book (
   - **Проверено** на 4 биржах для BTCUSDT — depth собирается и сохраняется корректно
   - **KuCoin Spot** — поправлена структура ответа (`data['data']`)
   - **KuCoin Futures** — создан с нуля, работает, стандартизация XBTUSD → BTCUSD
-  - **Не интегрировано в main.py** — текущий main.py не использует `OrderBookCollector`
+  - **Интегрировано в main.py** — OrderBookCollector с TTL-кешем подключён через `SpreadMonitor`, загружается on-demand для топ-кандидатов.
   - **Ограничение:** `collect_top_pairs()` собирает только указанные пользователем пары, не топ-N по объёму. Для полноценного "топ-50 пар по объёму" нужен дополнительный анализ.
 
 - [ ] **Копитрейдинг из Telegram/Discord** — модуль распознавания торговых сигналов из каналов. Сигналы приходят в двух форматах:
@@ -259,13 +300,18 @@ CREATE TABLE {exchange}_order_book (
   - Не требует локальной модели — объём сообщений низкий, экономия на облачном API незначительна.
 
 - [x] **DB-backed TTL cache для OrderBookCollector** — `get_order_book_cached(api, repo, symbol, ttl_seconds=5.0)`: перед HTTP-запросом проверяет timestamp последней записи в `{exchange}_order_book` через `get_order_book_with_age()`. Если запись свежая (age < TTL) — возвращает из БД (cache hit), иначе — HTTP-запрос + save (cache miss). TTL по умолчанию 5 секунд.
-- [ ] **Интеграция Order Book depth в main.py** — Order Book будет подключён on-demand через модуль "Мониторинг спредов" (см. ниже): вызывается для конкретной пары-кандидата в момент обнаружения ценового расхождения, не по фиксированному списку и не по периодическому расписанию. Требует реализации спред-монитора.
+- [x] **Интеграция Order Book depth в main.py** — Order Book подключён on-demand через `SpreadMonitor`: загружается для топ-кандидатов при обнаружении ценового расхождения, не по фиксированному списку.
 
 - [ ] **WebSocket** — замена REST polling (5 сек) на real-time стримы (Binance WebSocket, KuCoin WebSocket).
 
 - [ ] **Исторические данные** — сейчас БД хранит только последнее значение. Нужна таблица `price_history` с временными рядами.
 
-- [ ] **Мониторинг спредов** — расчёт разницы цен на `unique_pairs` между биржами.
+- [x] **Мониторинг спредов (SpreadMonitor)**:
+  - Spot-only сравнение (`binance_trading_pairs` ↔ `kucoin_trading_pairs`), фьючерсы исключены
+  - JOIN по `standardized_pair`, сравнение best bid/ask с учётом комиссий бирж
+  - [COLLISION?]-защита: спред ≥20% (параметр `suspected_collision_threshold_percent`) → разные токены с одинаковым тикером, помечается `suspected_collision`
+  - Расчёт slippage через Order Book (TTL-кеш 5 сек) для топ-кандидатов
+  - Сохранение в `arbitrage_opportunities` через INSERT (накопление истории, не перезапись)
 
 ### 5.2. Новые платформы (среднесрочный)
 - [ ] **DEX (децентрализованные биржи):**
@@ -288,14 +334,35 @@ CREATE TABLE {exchange}_order_book (
 - [ ] Уточнить раздел 5.5 — миграция БД должна быть завершена до или сразу после переноса на VPS, так как именно на этом масштабе (5+ бирж, круглосуточная работа) SQLite перестаёт справляться
 
 ### 5.3. Функциональность (среднесрочный)
-- [ ] **Арбитражный движок:**
-  - Поиск расхождений цен (с учётом комиссий)
-  - Расчёт потенциальной прибыли
-  - Фильтрация по минимальному объёму
-  - Учёт проскальзывания на основе Order Book depth
+- [x] **Арбитражный движок (SpreadMonitor):**
+  - [x] Поиск расхождений цен (с учётом комиссий) — `SpreadMonitor.scan()`
+  - [x] Расчёт потенциальной прибыли — `ArbitrageOpportunity.estimated_profit_usdt()`
+  - [x] Фильтрация по минимальному объёму — `min_volume_usdt`, `max_opportunities`
+  - [x] Учёт проскальзывания на основе Order Book depth — `_calc_slippage()` через `OrderBookCollector`
+  - [x] [COLLISION?]-защита от разных токенов с одинаковым тикером на разных биржах (порог 20%)
 - [ ] **Управление балансами:**
   - Поддержка приватных API-ключей для торговли
   - Отслеживание балансов на биржах
+- [ ] **Учёт нулевых/льготных торговых комиссий:**
+  - Некоторые биржи предлагают 0% taker fee постоянно (MEXC, Bitfinex) — можно заложить 
+    как статичное значение в `exchanges.taker_fee` при добавлении такой биржи.
+  - Другие биржи (Binance, Bybit, OKX, KuCoin, Gate.io) периодически запускают временные 
+    промо (0% на 1–4 недели для отдельных монет) — требует **живого** источника данных, 
+    не статичного поля. Риск: если бот не отследит окончание промо, расчёт прибыли 
+    окажется неверным на реальной сделке.
+  - Скидка за холд локальной монеты биржи (BNB на Binance, MX на MEXC и т.д.) — требует 
+    знания баланса пользователя на конкретной бирже → зависит от задачи "Управление 
+    балансами" выше (приватные API-ключи), либо ручного подтверждения пользователем.
+  - **Предлагаемый MVP** (до полной автоматизации через приватный API):
+    - Расширить схему `exchanges` полями `has_zero_fee_promo BOOLEAN`, 
+      `fee_discount_token TEXT`, `fee_discount_percent REAL`
+    - Ручной override пользователем ("на MEXC taker=0", "у меня есть BNB для скидки на 
+      Binance") — без автоматического мониторинга промо-акций на старте
+    - Автоматизация (парсинг промо-страниц или API баланса) — отдельная, более сложная 
+      подзадача на будущее
+  - Цель фичи: позволяет закрывать арбитражные сделки market-ордерами (мгновенно) вместо 
+    лимитных, не теряя маржу на комиссии — потенциально ускоряет исполнение арбитражных 
+    возможностей.
 - [ ] **Уведомления:**
   - Telegram-бот при найденном арбитраже
   - Оповещения при падении/восстановлении бирж
@@ -303,6 +370,7 @@ CREATE TABLE {exchange}_order_book (
 ### 5.4. Инфраструктура (долгосрочный)
 - [ ] **REST API** (FastAPI) для внешнего доступа к данным
 - [ ] **Веб-интерфейс** — дашборд с графиками и метриками
+- [ ] **Очистить git от `data/arbitrage_data.db`** — правило `data/*.db` уже в `.gitignore`, осталось `git rm --cached data/arbitrage_data.db` и закоммитить, чтобы файл перестал отслеживаться.
 - [ ] **Docker-контейнеризация**
 - [ ] **Тесты** — unit-тесты (pytest) на API-клиенты и репозитории
 - [ ] **CI/CD** — GitHub Actions для линтинга и тестов
@@ -328,7 +396,7 @@ CREATE TABLE {exchange}_order_book (
 - **KuCoin Futures mark_price:** Источником цены для KuCoin Futures является эндпоинт `allTickers` (а не отдельный тикерный эндпоинт). `mark_price` из `allTickers` может отличаться от цен Binance Futures на ~0.5–1% из-за разных ставок финансирования и ликвидности на отдельных фьючерсных биржах. Это не баг, а суть арбитражной возможности.
 - **KuCoin Futures symbol:** spot-формат `BTC-USDT` (с дефисом), futures-формат `XBTUSDTM` (XBT вместо BTC).
 - **KuCoin Spot depth:** ответ от `/api/v1/market/orderbook/level2_20` приходит в `data['data']`, а не на корневом уровне.
-- **OrderBookRepository:** не интегрирован в `main.py`, живёт как отдельный компонент.
+- **OrderBookRepository:** интегрирован в `main.py` через `SpreadMonitor` с TTL-кешем (5 сек). Загружается on-demand для топ-кандидатов.
 
 ---
 
@@ -350,6 +418,22 @@ CREATE TABLE {exchange}_order_book (
   > В процессе: API-клиент готов, Collector — нет, интеграция в main.py — нет
 
   PLAN.md является единственным источником правды о состоянии проекта.
+
+### Редактирование PLAN.md — особые правила
+
+- Для правок PLAN.md Cline ВСЕГДА использует `replace_in_file` (точечная замена 
+  конкретного фрагмента), НИКОГДА `write_to_file` (полная перезапись файла). 
+  Если нужно добавить большой новый раздел — делать это через `replace_in_file` 
+  с точным указанием, после какого существующего текста вставить новый блок, 
+  а не переписывать файл целиком.
+- Если Cline не уверен в текущем полном содержимом PLAN.md (например, после 
+  компакции контекста) — сначала явно прочитать файл (`read_file`), и только 
+  затем предлагать правку.
+- Перед применением любой правки PLAN.md — показать пользователю diff/превью 
+  изменений и дождаться подтверждения, даже если задача сформулирована как 
+  "точечная правка" из раздела 6.2.
+- Это правило существует из-за инцидента, когда write_to_file полностью заменил 
+  содержимое PLAN.md вместо добавления нового раздела — откачено через git.
 
 ### 6.2. Формат задач для Cline
 
