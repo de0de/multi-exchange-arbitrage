@@ -54,6 +54,8 @@ class SpreadMonitor:
         "binance_futures": "Binance Futures",
         "kucoin": "KuCoin",
         "kucoin_futures": "KuCoin Futures",
+        "gate": "Gate.io",
+        "mexc": "MEXC",
     }
 
     def __init__(
