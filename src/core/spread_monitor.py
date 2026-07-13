@@ -447,6 +447,31 @@ class SpreadMonitor:
 
         return final
 
+    async def fetch_order_books_for_opportunity(
+        self,
+        opp: ArbitrageOpportunity,
+    ) -> Tuple[Optional[OrderBookData], Optional[OrderBookData]]:
+        """
+        Загружает Order Book обеих сторон возможности через TTL-кеш.
+
+        Публичная точка доступа для Paper Trading: возвращает
+        (order_book биржи покупки, order_book биржи продажи),
+        любой из них может быть None при ошибке загрузки.
+        """
+        buy_key = self._find_exchange_key_by_display(opp.exchange_buy)
+        sell_key = self._find_exchange_key_by_display(opp.exchange_sell)
+        if buy_key is None or sell_key is None:
+            return None, None
+
+        buy_symbol = self._get_original_symbol(buy_key, opp.standardized_pair)
+        sell_symbol = self._get_original_symbol(sell_key, opp.standardized_pair)
+        if buy_symbol is None or sell_symbol is None:
+            return None, None
+
+        buy_ob = await self._fetch_order_book_with_cache(buy_key, buy_symbol)
+        sell_ob = await self._fetch_order_book_with_cache(sell_key, sell_symbol)
+        return buy_ob, sell_ob
+
     def _find_exchange_key_by_display(self, display_name: str) -> Optional[str]:
         """Ищет exchange_key по display_name."""
         for key, display in self.EXCHANGE_DISPLAY.items():
