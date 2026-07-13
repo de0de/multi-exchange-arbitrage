@@ -474,7 +474,7 @@ CREATE TABLE arbitrage_opportunities (
 ### 5.4. Инфраструктура (долгосрочный)
 - [ ] **REST API** (FastAPI) для внешнего доступа к данным
 - [ ] **Веб-интерфейс** — дашборд с графиками и метриками
-- [ ] **Очистить git от `data/arbitrage_data.db`** — правило `data/*.db` уже в `.gitignore`, осталось `git rm --cached data/arbitrage_data.db` и закоммитить, чтобы файл перестал отслеживаться.
+- [x] **Очистить git от `data/arbitrage_data.db`** — правило `data/*.db` уже в `.gitignore`, выполнено: `git rm --cached` + коммит, файл больше не отслеживается.
 - [ ] **Docker-контейнеризация**
 - [ ] **Тесты** — unit-тесты (pytest) на API-клиенты и репозитории
 - [ ] **CI/CD** — GitHub Actions для линтинга и тестов
