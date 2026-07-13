@@ -29,7 +29,8 @@ Cline — правила в `.clinerules`. Claude Code — правила в `CL
 multi-exchange-arbitrage/
 ├── main.py                          # Точка входа, оркестратор
 ├── config/
-│   └── settings.py                  # DATABASE_URL, ключи из .env
+│   ├── settings.py                  # DATABASE_URL, ключи из .env
+│   └── transfer_config.py           # Словарь переводов монет: сеть, withdrawal fee, время (paper trading)
 ├── src/
 │   ├── api/exchanges/cex/           # API-клиенты централизованных бирж
 │   │   ├── base_cex_exchange.py     # Базовый класс: aiohttp-сессия, _make_request, retry, hmac-подпись
@@ -40,10 +41,14 @@ multi-exchange-arbitrage/
 │   │       └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
 │   ├── core/
 │   │   ├── spread_monitor.py           # Мониторинг спредов (spot-only, INSERT)
+│   │   ├── paper_trading/
+│   │   │   ├── base_strategy.py         # BasePaperTradingStrategy — общий интерфейс стратегий
+│   │   │   └── spot_spot_strategy.py    # SpotSpotStrategy — Realistic spot-spot симуляция
 │   │   └── models/
 │   │       ├── pair_data.py             # PairData: цена, объём, bid/ask, метка времени
 │   │       ├── order_book_data.py       # OrderBookData, OrderBookLevel — depth стакана
 │   │       ├── arbitrage_opportunity.py # ArbitrageOpportunity, SlippageInfo
+│   │       ├── simulated_trade.py       # SimulatedTrade — гипотетическая сделка paper trading
 │   │       ├── currencies.py            # Currency
 │   │       └── exchanges.py             # Exchange (name, maker_fee, taker_fee)
 │   ├── data/collectors/cex/          # Сборщики данных (API → БД)
@@ -59,6 +64,7 @@ multi-exchange-arbitrage/
 │   │   ├── order_book_repository.py # {exchange}_order_book (top-20 уровней, UPSERT)
 │   │   ├── funding_rate_repository.py # {exchange}_funding_rates
 │   │   ├── arbitrage_opportunity_repository.py # arbitrage_opportunities (INSERT)
+│   │   ├── simulated_trade_repository.py # simulated_trades (paper trading, INSERT + UPDATE при закрытии)
 │   │   ├── currencies_repository.py # Справочник валют
 │   │   ├── exchanges_repository.py  # Справочник бирж (с комиссиями)
 │   │   └── trading_pairs_repository.py # unique_pairs (дедупликация)
@@ -227,6 +233,34 @@ CREATE TABLE arbitrage_opportunities (
     readable_time          TEXT,
     suspected_collision    INTEGER DEFAULT 0
 );
+
+-- Симулированные сделки Paper Trading (Фаза 1: spot-spot)
+CREATE TABLE simulated_trades (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    opportunity_id            INTEGER NOT NULL REFERENCES arbitrage_opportunities(id),
+    status                    TEXT NOT NULL DEFAULT 'open',  -- open / closed
+    entry_detected_at         REAL NOT NULL,
+    entry_readable_time       TEXT,
+    requested_volume_usdt     REAL NOT NULL,
+    executed_volume_usdt      REAL NOT NULL,
+    partial_fill              INTEGER DEFAULT 0,  -- стакан не вместил объём → 2-я withdrawal fee за остаток
+    entry_buy_price_effective REAL,               -- цена покупки с учётом slippage
+    base_amount               REAL,               -- куплено base currency (после торговой комиссии)
+    transfer_network          TEXT,
+    expected_transfer_seconds REAL,
+    hypothetical_close_at     REAL NOT NULL,      -- entry_detected_at + время перевода
+    withdrawal_fee_coin       REAL,
+    withdrawal_fee_usdt       REAL,
+    fee_unknown               INTEGER DEFAULT 0,  -- монета вне словаря переводов
+    volume_curve              TEXT,               -- JSON: net_profit_percent по точкам объёма
+    closed_at                 REAL,               -- фактическое закрытие (может быть позже плана)
+    close_readable_time       TEXT,
+    close_price_buy           REAL,               -- актуальный ask биржи покупки (справочно)
+    close_price_sell          REAL,               -- актуальный bid биржи продажи (цена исполнения)
+    realized_profit_usdt      REAL,
+    realized_profit_percent   REAL,
+    outcome                   TEXT                -- profitable / unprofitable / opportunity_vanished / fee_unknown
+);
 ```
 
 ---
@@ -347,7 +381,7 @@ CREATE TABLE arbitrage_opportunities (
   - Расчёт slippage через Order Book (TTL-кеш 5 сек) для топ-кандидатов
   - Сохранение в `arbitrage_opportunities` через INSERT (накопление истории, не перезапись)
 
-- [ ] **Paper Trading симуляция — Фаза 1 (spot-spot, следующий приоритет перед Gate.io/MEXC):**
+- [x] **Paper Trading симуляция — Фаза 1 (spot-spot) — реализовано:**
   - Realistic-модель (не Instant) — между открытием и закрытием позиции проходит 
     реальное время перевода средств между биржами, к моменту закрытия цены 
     сверяются заново, не экстраполируются с момента обнаружения
@@ -364,6 +398,36 @@ CREATE TABLE arbitrage_opportunities (
   - Архитектура: заложить общий интерфейс/базовый класс уже сейчас (например 
     `BasePaperTradingStrategy` → `SpotSpotStrategy`), даже с одним наследником — 
     чтобы Фаза 2 не потребовала болезненного рефакторинга
+  - **Итог реализации:** `BasePaperTradingStrategy` → `SpotSpotStrategy` 
+    (`src/core/paper_trading/`), таблица `simulated_trades` 
+    (`SimulatedTradeRepository`, FK на `arbitrage_opportunities.id`), словарь 
+    переводов `config/transfer_config.py` (18 монет: сеть, withdrawal fee, 
+    время перевода), размер сделки $1000 (рабочий депозит — на малых объёмах 
+    фиксированные издержки перевода искажают результат), кривая `volume_curve` 
+    по точкам $100–$5000 с логом рекомендации по объёму (зависимость 
+    немонотонна: снизу давит withdrawal fee, сверху slippage — подтверждено 
+    на реальных данных).
+  - **Ограничения:** slippage продажи при закрытии не пересчитывается по 
+    стакану (используется best bid из `{exchange}_trading_pairs`); при 
+    частичном исполнении остаток считается купленным по той же эффективной 
+    цене (вторая withdrawal fee учтена); монеты вне словаря переводов дают 
+    `outcome=fee_unknown` и исключаются из агрегатов прибыльности.
+  - **Следующий быстрый шаг — пополнение словаря переводов.** Реальные находки 
+    (ANKR, BONK, MANTA) оказались вне словаря: пока он не пополнен, основная 
+    масса сделок будет `fee_unknown` — симуляция технически работает, но 
+    практически бесполезна на реальных данных. Приоритет пополнения — НЕ 
+    произвольный топ монет, а те, что реально фигурируют в 
+    `arbitrage_opportunities` за последние N дней:
+    ```sql
+    SELECT base_currency, COUNT(*) AS cnt
+    FROM arbitrage_opportunities
+    WHERE suspected_collision = 0
+      AND timestamp > strftime('%s', 'now', '-14 days')
+    GROUP BY base_currency
+    ORDER BY cnt DESC;
+    ```
+    Комиссии и сети смотреть на страницах вывода Binance/KuCoin для каждой 
+    монеты из результата.
 
 - [ ] **Paper Trading симуляция — Фаза 2 (spot-futures / futures-futures, после Фазы 1):**
   - Перевод между биржами не нужен только если обе ноги на одной бирже — 
