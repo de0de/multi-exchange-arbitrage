@@ -58,8 +58,13 @@ class ArbitrageOpportunityRepository:
         """)
         self.conn.commit()
 
-    def save_opportunity(self, opp: ArbitrageOpportunity):
-        """INSERT: сохраняет одну арбитражную возможность (история событий)."""
+    def save_opportunity(self, opp: ArbitrageOpportunity) -> int:
+        """
+        INSERT: сохраняет одну арбитражную возможность (история событий).
+
+        Возвращает id вставленной записи (нужен Paper Trading для FK
+        simulated_trades.opportunity_id).
+        """
         self.cursor.execute("""
             INSERT INTO arbitrage_opportunities (
                 standardized_pair, base_currency, quote_currency,
@@ -111,9 +116,10 @@ class ArbitrageOpportunityRepository:
             1 if opp.suspected_collision else 0,
         ))
         self.conn.commit()
+        return self.cursor.lastrowid
 
-    def save_opportunities(self, opportunities: List[ArbitrageOpportunity]):
-        """Сохраняет список арбитражных возможностей."""
-        for opp in opportunities:
-            self.save_opportunity(opp)
+    def save_opportunities(self, opportunities: List[ArbitrageOpportunity]) -> List[int]:
+        """Сохраняет список арбитражных возможностей. Возвращает список id."""
+        ids = [self.save_opportunity(opp) for opp in opportunities]
         self.logger.info(f"Saved {len(opportunities)} arbitrage opportunities to database")
+        return ids

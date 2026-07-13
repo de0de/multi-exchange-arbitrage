@@ -19,7 +19,9 @@ from src.database.currencies_repository import CurrenciesRepository
 from src.database.exchanges_repository import ExchangesRepository
 from src.database.trading_pairs_repository import TradingPairsRepository
 from src.database.order_book_repository import OrderBookRepository
+from src.database.simulated_trade_repository import SimulatedTradeRepository
 from src.core.spread_monitor import SpreadMonitor
+from src.core.paper_trading.spot_spot_strategy import SpotSpotStrategy
 from src.utils.logger import setup_logging
 from src.utils.health_monitor import health_monitor
 from config.settings import DATABASE_URL
@@ -109,6 +111,17 @@ async def main():
         ob_ttl_seconds=5.0,
         suspected_collision_threshold_percent=20.0,
         max_opportunities=100,
+    )
+
+    # Paper Trading (Фаза 1, spot-spot): симуляция исполнения найденных
+    # возможностей с реалистичной задержкой перевода между биржами
+    simulated_trade_repo = SimulatedTradeRepository(conn)
+    paper_strategy = SpotSpotStrategy(
+        conn=conn,
+        spread_monitor=spread_monitor,
+        trade_repo=simulated_trade_repo,
+        trade_size_usdt=1000.0,  # рабочий депозит
+        min_profit_threshold_percent=0.1,
     )
 
     # Запускаем мониторинг здоровья бирж
@@ -213,8 +226,15 @@ async def main():
             logger.debug("Сканирование арбитражных возможностей...")
             opportunities = await spread_monitor.scan()
             if opportunities:
-                spread_monitor.save_results(opportunities)
+                opportunity_ids = spread_monitor.save_results(opportunities)
                 spread_monitor.log_top_opportunities(opportunities, top_n=10)
+
+                # Paper trading: открываем симулированные позиции по новым возможностям
+                await paper_strategy.open_positions(list(zip(opportunity_ids, opportunities)))
+
+            # Paper trading: закрываем позиции, у которых истекло время перевода
+            # (проверяется каждый цикл, независимо от наличия новых возможностей)
+            await paper_strategy.close_ready_positions()
 
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start

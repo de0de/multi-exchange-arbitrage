@@ -498,9 +498,9 @@ class SpreadMonitor:
             self.logger.debug(f"Cannot read {table}: {e}")
             return None
 
-    def save_results(self, opportunities: List[ArbitrageOpportunity]):
-        """Сохраняет результаты в БД через репозиторий."""
-        self.opportunity_repo.save_opportunities(opportunities)
+    def save_results(self, opportunities: List[ArbitrageOpportunity]) -> List[int]:
+        """Сохраняет результаты в БД через репозиторий. Возвращает список id."""
+        return self.opportunity_repo.save_opportunities(opportunities)
 
     def log_top_opportunities(self, opportunities: List[ArbitrageOpportunity], top_n: int = 10):
         """Логирует топ-N арбитражных возможностей."""
