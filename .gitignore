@@ -7,6 +7,8 @@ __pycache__/
 app.log
 git_команды
 data/*.db
+data/*.db-wal
+data/*.db-shm
 logs/
 tmp_test_*.py
 scratch_*.py
