@@ -78,7 +78,6 @@ class SpreadMonitor:
         ob_concurrency: int = 10,
         history_min_spread_percent: float = 0.2,
         history_snapshot_interval: float = 300.0,
-        history_retention_days: float = 14.0,
     ):
         self.conn = conn
         self.cursor = conn.cursor()
@@ -107,13 +106,12 @@ class SpreadMonitor:
         self.opportunity_repo = ArbitrageOpportunityRepository(conn)
 
         # История спредов (DATA_SPECIFICATION.md, раздел 3): агрегат по паре,
-        # порог записи + периодический полный снэпшот + retention
+        # порог записи + периодический полный снэпшот. Retention-очисткой
+        # владеет HistoryArchiver (экспорт в .csv.gz перед удалением)
         self.history_min_spread_percent = history_min_spread_percent
         self.history_snapshot_interval = history_snapshot_interval
-        self.history_retention_days = history_retention_days
         self.history_repo = SpreadHistoryRepository(conn)
         self._last_history_snapshot = 0.0
-        self._last_retention_check = 0.0
 
     def _load_exchange_fees(self):
         """Загружает taker_fee из таблицы exchanges в кеш на время жизни объекта."""
@@ -466,10 +464,11 @@ class SpreadMonitor:
 
     def _save_history(self, history_rows: List[tuple], snapshot_due: bool, now: float):
         """
-        Сохраняет буфер истории спредов и раз в сутки запускает retention.
+        Сохраняет буфер истории спредов.
 
-        Ошибки записи истории не должны ронять основной цикл сканирования —
-        история вторична по отношению к детекции возможностей.
+        Retention-очистка здесь НЕ выполняется — ей владеет HistoryArchiver
+        (main loop), который экспортирует устаревшие строки в .csv.gz перед
+        удалением. Ошибки записи истории не должны ронять основной цикл.
         """
         try:
             self.history_repo.save_rows(history_rows)
@@ -480,11 +479,6 @@ class SpreadMonitor:
                 )
             elif history_rows:
                 self.logger.debug(f"spread_history: записано {len(history_rows)} строк")
-
-            if now - self._last_retention_check >= 86400:
-                self._last_retention_check = now
-                cutoff = now - self.history_retention_days * 86400
-                self.history_repo.delete_older_than(cutoff)
         except sqlite3.Error as e:
             self.logger.error(f"spread_history: ошибка записи: {e}")
 

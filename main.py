@@ -17,6 +17,7 @@ from src.data.collectors.cex.kucoin_futures_collector import KuCoinFuturesCollec
 from src.data.collectors.cex.gate_collector import GateCollector
 from src.data.collectors.cex.mexc_collector import MexcCollector
 from src.data.collectors.cex.order_book_collector import OrderBookCollector
+from src.data.history_archiver import HistoryArchiver
 from src.database.market_repository import MarketRepository
 from src.database.funding_rate_repository import FundingRateRepository
 from src.database.currencies_repository import CurrenciesRepository
@@ -129,6 +130,11 @@ async def main():
         suspected_collision_threshold_percent=20.0,
         max_opportunities=100,
     )
+
+    # Архиватор истории: раз в сутки экспортирует устаревшие строки
+    # (spread_history, futures_spread_history, arbitrage_opportunities)
+    # в data/archive/*.csv.gz и только затем удаляет их (retention 14 дней)
+    history_archiver = HistoryArchiver(conn)
 
     # Мониторинг спот-фьюч / фьюч-фьюч basis: только запись истории
     # (futures_spread_history, funding_rate_history), без симуляции —
@@ -277,6 +283,9 @@ async def main():
                 futures_spread_monitor.scan()
             except Exception as e:
                 logger.error(f"FuturesSpreadMonitor: ошибка сканирования: {e}")
+
+            # Ежесуточная архивация+retention истории (экспорт в data/archive)
+            history_archiver.run_if_due()
 
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start

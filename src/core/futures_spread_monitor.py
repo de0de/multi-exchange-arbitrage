@@ -50,7 +50,6 @@ class FuturesSpreadMonitor:
         conn: sqlite3.Connection,
         min_basis_percent: float = 0.2,
         snapshot_interval: float = 300.0,
-        retention_days: float = 14.0,
         max_staleness_seconds: float = 15.0,
         allowed_quote_currencies: Optional[List[str]] = None,
         suspected_collision_threshold_percent: float = 20.0,
@@ -64,7 +63,6 @@ class FuturesSpreadMonitor:
 
         self.min_basis_percent = min_basis_percent
         self.snapshot_interval = snapshot_interval
-        self.retention_days = retention_days
         self.max_staleness_seconds = max_staleness_seconds
         self.allowed_quote_currencies = allowed_quote_currencies or ["USDT", "USDC", "BTC", "ETH"]
         self.collision_threshold = suspected_collision_threshold_percent
@@ -82,7 +80,6 @@ class FuturesSpreadMonitor:
         self.funding_drift_min_interval = funding_drift_min_interval
 
         self._last_snapshot = 0.0
-        self._last_retention_check = 0.0
         # Последние записанные ставки (+момент записи) — восстанавливаются
         # из истории, чтобы рестарт не порождал дубликаты «изменений»
         self._last_funding: Dict[Tuple[str, str], Tuple[float, float]] = \
@@ -213,10 +210,7 @@ class FuturesSpreadMonitor:
                 )
             elif rows:
                 self.logger.debug(f"futures_spread_history: записано {len(rows)} строк")
-
-            if now - self._last_retention_check >= 86400:
-                self._last_retention_check = now
-                self.history_repo.delete_older_than(now - self.retention_days * 86400)
+            # Retention-очисткой владеет HistoryArchiver (экспорт перед удалением)
         except sqlite3.Error as e:
             self.logger.error(f"futures_spread_history: ошибка записи: {e}")
 

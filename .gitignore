@@ -9,6 +9,7 @@ git_команды
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/archive/
 logs/
 tmp_test_*.py
 scratch_*.py
