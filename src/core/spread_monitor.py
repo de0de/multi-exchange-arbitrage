@@ -7,6 +7,7 @@
 
 Использует единое соединение sqlite3 из main.py.
 """
+import asyncio
 import logging
 import sqlite3
 import time
@@ -38,7 +39,7 @@ class SpreadMonitor:
     """
 
     # Список биржевых таблиц trading_pairs для сравнения.
-    # Включены только spot-биржи (Binance Spot, KuCoin Spot).
+    # Включены только spot-биржи (Binance, KuCoin, Gate.io, MEXC).
     # Futures исключены, так как spot↔futures сравнение даёт ложные
     # "арбитражные возможности" из-за разной природы цен (фьючерсные
     # премии/дисконты, funding rate) — такие пары не являются реальными
@@ -46,6 +47,8 @@ class SpreadMonitor:
     EXCHANGE_TABLES: List[str] = [
         "binance_trading_pairs",
         "kucoin_trading_pairs",
+        "gate_trading_pairs",
+        "mexc_trading_pairs",
     ]
 
     # Маппинг: exchange_name (из БД) → exchange_display_name (из API)
@@ -71,6 +74,7 @@ class SpreadMonitor:
         ob_ttl_seconds: float = 5.0,
         suspected_collision_threshold_percent: float = 20.0,
         max_opportunities: int = 100,
+        ob_concurrency: int = 10,
     ):
         self.conn = conn
         self.cursor = conn.cursor()
@@ -81,6 +85,7 @@ class SpreadMonitor:
         self.order_book_repos = order_book_repos
         self.order_book_collector = order_book_collector
         self.ob_ttl_seconds = ob_ttl_seconds
+        self.ob_concurrency = ob_concurrency
 
         # Параметры фильтрации
         self.min_spread_percent = min_spread_percent
@@ -369,65 +374,33 @@ class SpreadMonitor:
             self.logger.info("No candidates found after filtering")
             return []
 
-        # 4. Сортируем по net_spread убыванию и берём топ-N * 3 для проверки Order Book
-        top_n_candidates = min(len(candidates), self.max_opportunities * 3)
-        candidates.sort(key=lambda opp: opp.net_spread_percent, reverse=True)
-        top_candidates = candidates[:top_n_candidates]
+        # 4. Сортируем по net_spread убыванию и берём топ-N * 3 для проверки Order Book.
+        #    Кандидаты с подозрением на коллизию тикеров исключаются из проверки:
+        #    slippage им не нужен (paper trading их пропускает), а на 4+ биржах
+        #    коллизий десятки — без фильтра они съедают весь бюджет HTTP-запросов
+        #    Order Book и растягивают цикл сканирования на минуты.
+        non_collision = [opp for opp in candidates if not opp.suspected_collision]
+        top_n_candidates = min(len(non_collision), self.max_opportunities * 3)
+        non_collision.sort(key=lambda opp: opp.net_spread_percent, reverse=True)
+        top_candidates = non_collision[:top_n_candidates]
 
         self.logger.info(
-            f"Found {len(candidates)} candidates, "
+            f"Found {len(candidates)} candidates "
+            f"({len(candidates) - len(non_collision)} suspected collisions), "
             f"checking Order Book for top {len(top_candidates)}"
         )
 
-        # 5. Для топ-кандидатов загружаем Order Book и рассчитываем slippage
-        for opp in top_candidates:
-            # Определяем exchange_key и original_pair для запроса Order Book
-            buy_exch_key = self._find_exchange_key_by_display(opp.exchange_buy)
-            sell_exch_key = self._find_exchange_key_by_display(opp.exchange_sell)
+        # 5. Для топ-кандидатов загружаем Order Book и рассчитываем slippage.
+        #    Кандидаты обрабатываются параллельно (ограничение — семафор):
+        #    последовательная загрузка на 4 биржах (100+ кандидатов × 2 стакана)
+        #    растягивала цикл сканирования на минуты.
+        semaphore = asyncio.Semaphore(self.ob_concurrency)
 
-            if buy_exch_key is None or sell_exch_key is None:
-                continue
+        async def check_candidate(opp: ArbitrageOpportunity):
+            async with semaphore:
+                await self._apply_slippage(opp)
 
-            # Определяем original_pair для каждой биржи (может отличаться)
-            buy_symbol = self._get_original_symbol(buy_exch_key, opp.standardized_pair)
-            sell_symbol = self._get_original_symbol(sell_exch_key, opp.standardized_pair)
-
-            if buy_symbol is None or sell_symbol is None:
-                self.logger.debug(
-                    f"Cannot resolve symbol for {opp.standardized_pair} "
-                    f"on {buy_exch_key}/{sell_exch_key}, skipping slippage"
-                )
-                continue
-
-            # Загружаем Order Book для buy и sell бирж
-            buy_ob = await self._fetch_order_book_with_cache(buy_exch_key, buy_symbol)
-            sell_ob = await self._fetch_order_book_with_cache(sell_exch_key, sell_symbol)
-
-            if buy_ob is None or sell_ob is None:
-                self.logger.debug(
-                    f"No Order Book data for {opp.standardized_pair}, "
-                    f"keeping without slippage adjustment"
-                )
-                continue
-
-            # Рассчитываем slippage для buy (покупаем — смотрим asks) и sell (продаём — смотрим bids)
-            buy_slippage = self._calc_slippage(buy_ob, is_buy_side=True, target_volume=opp.buy_volume_original)
-            sell_slippage = self._calc_slippage(sell_ob, is_buy_side=False, target_volume=opp.sell_volume_original)
-
-            # Общий slippage = сумма impact с обеих сторон
-            total_slippage_percent = buy_slippage.price_impact_percent + sell_slippage.price_impact_percent
-
-            # Объём, доступный с учётом slippage (минимальный filled объём с обеих сторон)
-            slippage_limited_volume_usdt = min(
-                buy_slippage.filled_volume * opp.buy_price,
-                sell_slippage.filled_volume * opp.sell_price,
-            )
-
-            opp.buy_slippage = buy_slippage
-            opp.sell_slippage = sell_slippage
-            opp.slippage_available = True
-            opp.net_spread_with_slippage_percent = opp.net_spread_percent - total_slippage_percent
-            opp.slippage_limited_volume_usdt = slippage_limited_volume_usdt
+        await asyncio.gather(*(check_candidate(opp) for opp in top_candidates))
 
         # 6. Финальная сортировка:
         #    - сначала проверенные (slippage=True) по net_profit убыванию
@@ -448,6 +421,39 @@ class SpreadMonitor:
         )
 
         return final
+
+    async def _apply_slippage(self, opp: ArbitrageOpportunity):
+        """
+        Загружает Order Book обеих сторон возможности и проставляет
+        slippage-поля. При недоступности стакана оставляет кандидата
+        без slippage-корректировки (slippage_available=False).
+        """
+        buy_ob, sell_ob = await self.fetch_order_books_for_opportunity(opp)
+        if buy_ob is None or sell_ob is None:
+            self.logger.debug(
+                f"No Order Book data for {opp.standardized_pair}, "
+                f"keeping without slippage adjustment"
+            )
+            return
+
+        # Рассчитываем slippage для buy (покупаем — смотрим asks) и sell (продаём — смотрим bids)
+        buy_slippage = self._calc_slippage(buy_ob, is_buy_side=True, target_volume=opp.buy_volume_original)
+        sell_slippage = self._calc_slippage(sell_ob, is_buy_side=False, target_volume=opp.sell_volume_original)
+
+        # Общий slippage = сумма impact с обеих сторон
+        total_slippage_percent = buy_slippage.price_impact_percent + sell_slippage.price_impact_percent
+
+        # Объём, доступный с учётом slippage (минимальный filled объём с обеих сторон)
+        slippage_limited_volume_usdt = min(
+            buy_slippage.filled_volume * opp.buy_price,
+            sell_slippage.filled_volume * opp.sell_price,
+        )
+
+        opp.buy_slippage = buy_slippage
+        opp.sell_slippage = sell_slippage
+        opp.slippage_available = True
+        opp.net_spread_with_slippage_percent = opp.net_spread_percent - total_slippage_percent
+        opp.slippage_limited_volume_usdt = slippage_limited_volume_usdt
 
     async def fetch_order_books_for_opportunity(
         self,
