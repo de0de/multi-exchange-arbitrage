@@ -25,6 +25,7 @@ from src.database.trading_pairs_repository import TradingPairsRepository
 from src.database.order_book_repository import OrderBookRepository
 from src.database.simulated_trade_repository import SimulatedTradeRepository
 from src.core.spread_monitor import SpreadMonitor
+from src.core.futures_spread_monitor import FuturesSpreadMonitor
 from src.core.paper_trading.spot_spot_strategy import SpotSpotStrategy
 from src.utils.logger import setup_logging
 from src.utils.health_monitor import health_monitor
@@ -128,6 +129,11 @@ async def main():
         suspected_collision_threshold_percent=20.0,
         max_opportunities=100,
     )
+
+    # Мониторинг спот-фьюч / фьюч-фьюч basis: только запись истории
+    # (futures_spread_history, funding_rate_history), без симуляции —
+    # см. DATA_SPECIFICATION.md, разделы 4-5
+    futures_spread_monitor = FuturesSpreadMonitor(conn)
 
     # Paper Trading (Фаза 1, spot-spot): симуляция исполнения найденных
     # возможностей с реалистичной задержкой перевода между биржами
@@ -263,6 +269,14 @@ async def main():
             # Paper trading: закрываем позиции, у которых истекло время перевода
             # (проверяется каждый цикл, независимо от наличия новых возможностей)
             await paper_strategy.close_ready_positions()
+
+            # Запись спот-фьюч / фьюч-фьюч basis-истории.
+            # ВАЖНО: вызывается после сохранения funding rate выше по циклу —
+            # снимок funding в записях относится к текущему циклу, не прошлому
+            try:
+                futures_spread_monitor.scan()
+            except Exception as e:
+                logger.error(f"FuturesSpreadMonitor: ошибка сканирования: {e}")
 
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start
