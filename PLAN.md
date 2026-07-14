@@ -36,9 +36,13 @@ multi-exchange-arbitrage/
 │   │   ├── base_cex_exchange.py     # Базовый класс: aiohttp-сессия, _make_request, retry, hmac-подпись
 │   │   ├── binance/
 │   │   │   └── binance_spot_api.py  # Binance Spot (публичный, 1366 пар)
-│   │   └── kucoin/
-│   │       ├── kucoin_spot_api.py   # KuCoin Spot (публичный, 1037 пар)
-│   │       └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
+│   │   ├── kucoin/
+│   │   │   ├── kucoin_spot_api.py   # KuCoin Spot (публичный, 1037 пар)
+│   │   │   └── kucoin_futures_api.py # KuCoin Futures (публичный, контракты + allTickers)
+│   │   ├── gate/
+│   │   │   └── gate_spot_api.py     # Gate.io Spot (публичный, ~2200 пар)
+│   │   └── mexc/
+│   │       └── mexc_spot_api.py     # MEXC Spot (публичный, ~2100 пар, Binance-совместимый)
 │   ├── core/
 │   │   ├── spread_monitor.py           # Мониторинг спредов (spot-only, INSERT)
 │   │   ├── paper_trading/
@@ -57,6 +61,8 @@ multi-exchange-arbitrage/
 │   │   ├── binance_futures_collector.py # Binance Futures
 │   │   ├── kucoin_collector.py      # KuCoin Spot
 │   │   ├── kucoin_futures_collector.py # KuCoin Futures
+│   │   ├── gate_collector.py        # Gate.io Spot
+│   │   ├── mexc_collector.py        # MEXC Spot
 │   │   └── order_book_collector.py  # Order Book depth (универсальный, duck-typing)
 │   ├── database/
 │   │   ├── base_repository.py       # Абстрактный репозиторий
@@ -413,6 +419,16 @@ CREATE TABLE simulated_trades (
     частичном исполнении остаток считается купленным по той же эффективной 
     цене (вторая withdrawal fee учтена); монеты вне словаря переводов дают 
     `outcome=fee_unknown` и исключаются из агрегатов прибыльности.
+  - **Расширение на 4 биржи (решение от 2026-07-14):** сканер спредов и paper 
+    trading включены сразу на Binance/KuCoin/Gate.io/MEXC — осознанное 
+    отступление от исходной спецификации "начинать на 2 биржах". Обоснование: 
+    истории цен нет (только UPSERT-снэпшот), поэтому "понаблюдать за новыми 
+    биржами пару дней" ничего не проверяет; вместо этого детектор коллизий и 
+    диагностические сигналы paper trading (fee_unknown, opportunity_vanished, 
+    partial_fill) используются как QA-процесс для новых бирж. **Shakeout:** 
+    данные arbitrage_opportunities/simulated_trades переходного периода могут 
+    содержать необнаруженные баги данных новых бирж — не доверять агрегатной 
+    статистике по gate/mexc до первой проверки на вменяемость.
   - **Следующий быстрый шаг — пополнение словаря переводов.** Реальные находки 
     (ANKR, BONK, MANTA) оказались вне словаря: пока он не пополнен, основная 
     масса сделок будет `fee_unknown` — симуляция технически работает, но 
@@ -455,18 +471,25 @@ CREATE TABLE simulated_trades (
   - PancakeSwap (BSC)
   - TraderJoe (Avalanche)
   - Требуется: интеграция с web3.py, чтение пулов ликвидности через RPC
-- [ ] **CEX биржи (централизованные):**
-  - **Следующие 2 (приоритет):** Gate.io, MEXC — выбраны по наблюдениям за реальными 
-    арбитражными возможностями (Gate.io — чаще всего, MEXC — реже, но постоянно). 
-    MEXC также интересен отдельно из-за постоянного 0% taker fee (см. пункт про 
-    льготные комиссии в 5.3).
-  - **Кандидаты на будущее:** OKX, Bybit, Kraken
-  - Требуется: создать API-клиент + Collector по шаблону (раздел 4)
+- [x] **CEX биржи: Gate.io и MEXC — добавлены** (API + Collector по шаблону раздела 4, 
+  slug'и `gate`/`mexc`, сбор в основном цикле; включены в EXCHANGE_TABLES сканера 
+  спредов и, как следствие, в paper trading — см. пометку про shakeout в 5.1).
+  - **Уточнение по MEXC:** API (exchangeInfo) сообщает per-symbol комиссии 
+    maker 0% / taker 0.05% — исходное наблюдение про "постоянный 0% taker" 
+    (внешнее, не проверка собственного аккаунта) публичным API не подтверждается. 
+    Зарегистрировано консервативное 0.05%; ручной override при подтверждённой 
+    скидке — задача 5.3.
+  - **Кандидаты на будущее:** OKX, Bybit, Kraken (5-я биржа — после миграции БД, 
+    см. 5.2.1)
+- [ ] **Фьючерсы Gate.io и MEXC** — по аналогии с Binance/KuCoin Futures, отдельная 
+  задача после стабилизации spot-данных этих бирж. Раздел 4 PLAN.md описывает только 
+  spot-шаблон — фьючерсы для новых бирж всегда отдельный последующий шаг, не часть 
+  базового добавления биржи.
 
 ### 5.2.1. План масштабирования и переход на удалённый сервер
 
-- [ ] **Довести количество поддерживаемых CEX-бирж до 4** (текущие Binance, KuCoin + 
-  Gate.io + MEXC). Осознанно НЕ 5 — порог 5+ бирж уже зафиксирован ниже как триггер 
+- [x] **Довести количество поддерживаемых CEX-бирж до 4** — выполнено (Binance, KuCoin, 
+  Gate.io, MEXC). Осознанно НЕ 5 — порог 5+ бирж уже зафиксирован ниже как триггер 
   для миграции на PostgreSQL/TimescaleDB, инфраструктура под которую ещё не готова. 
   5-я биржа (из кандидатов OKX/Bybit/Kraken) — после того, как миграция БД будет 
   готова принять возросшую нагрузку.
