@@ -21,6 +21,7 @@ from src.core.models.arbitrage_opportunity import (
 from src.core.models.order_book_data import OrderBookData, OrderBookLevel
 from src.database.arbitrage_opportunity_repository import ArbitrageOpportunityRepository
 from src.database.order_book_repository import OrderBookRepository
+from src.database.spread_history_repository import SpreadHistoryRepository
 from src.data.collectors.cex.order_book_collector import OrderBookCollector
 
 
@@ -75,6 +76,9 @@ class SpreadMonitor:
         suspected_collision_threshold_percent: float = 20.0,
         max_opportunities: int = 100,
         ob_concurrency: int = 10,
+        history_min_spread_percent: float = 0.2,
+        history_snapshot_interval: float = 300.0,
+        history_retention_days: float = 14.0,
     ):
         self.conn = conn
         self.cursor = conn.cursor()
@@ -101,6 +105,15 @@ class SpreadMonitor:
 
         # Репозиторий для сохранения результатов
         self.opportunity_repo = ArbitrageOpportunityRepository(conn)
+
+        # История спредов (DATA_SPECIFICATION.md, раздел 3): агрегат по паре,
+        # порог записи + периодический полный снэпшот + retention
+        self.history_min_spread_percent = history_min_spread_percent
+        self.history_snapshot_interval = history_snapshot_interval
+        self.history_retention_days = history_retention_days
+        self.history_repo = SpreadHistoryRepository(conn)
+        self._last_history_snapshot = 0.0
+        self._last_retention_check = 0.0
 
     def _load_exchange_fees(self):
         """Загружает taker_fee из таблицы exchanges в кеш на время жизни объекта."""
@@ -254,6 +267,12 @@ class SpreadMonitor:
         candidates: List[ArbitrageOpportunity] = []
         now = time.time()
 
+        # Буфер истории спредов; раз в history_snapshot_interval пишутся
+        # ВСЕ многобиржевые пары (is_snapshot=1), иначе — только со спредом
+        # выше history_min_spread_percent
+        history_rows: List[tuple] = []
+        snapshot_due = (now - self._last_history_snapshot) >= self.history_snapshot_interval
+
         for std_pair, exchange_data in pairs_map.items():
             if len(exchange_data) < 2:
                 continue  # пара есть только на одной бирже
@@ -292,6 +311,26 @@ class SpreadMonitor:
 
             if len(exchange_prices) < 2:
                 continue
+
+            # Запись в историю спредов: одна строка-агрегат на пару за цикл
+            priced = [p for p in exchange_prices if p[1] and p[1] > 0 and p[2] and p[2] > 0]
+            if len(priced) >= 2:
+                best_bid_entry = max(priced, key=lambda p: p[1])
+                best_ask_entry = min(priced, key=lambda p: p[2])
+                hist_spread = (best_bid_entry[1] - best_ask_entry[2]) / best_ask_entry[2] * 100.0
+                if snapshot_due or hist_spread >= self.history_min_spread_percent:
+                    history_rows.append((
+                        std_pair,
+                        best_bid_entry[1],
+                        self._get_exchange_display(best_bid_entry[0]),
+                        best_ask_entry[2],
+                        self._get_exchange_display(best_ask_entry[0]),
+                        hist_spread,
+                        len(priced),
+                        1 if snapshot_due else 0,
+                        1 if hist_spread >= self.suspected_collision_threshold_percent else 0,
+                        now,
+                    ))
 
             # 3. Сравниваем все пары бирж
             for i in range(len(exchange_prices)):
@@ -370,6 +409,9 @@ class SpreadMonitor:
                         suspected_collision=suspected_collision,
                     ))
 
+        # История спредов сохраняется независимо от наличия кандидатов
+        self._save_history(history_rows, snapshot_due, now)
+
         if not candidates:
             self.logger.info("No candidates found after filtering")
             return []
@@ -421,6 +463,30 @@ class SpreadMonitor:
         )
 
         return final
+
+    def _save_history(self, history_rows: List[tuple], snapshot_due: bool, now: float):
+        """
+        Сохраняет буфер истории спредов и раз в сутки запускает retention.
+
+        Ошибки записи истории не должны ронять основной цикл сканирования —
+        история вторична по отношению к детекции возможностей.
+        """
+        try:
+            self.history_repo.save_rows(history_rows)
+            if snapshot_due:
+                self._last_history_snapshot = now
+                self.logger.info(
+                    f"spread_history: полный снэпшот, записано {len(history_rows)} строк"
+                )
+            elif history_rows:
+                self.logger.debug(f"spread_history: записано {len(history_rows)} строк")
+
+            if now - self._last_retention_check >= 86400:
+                self._last_retention_check = now
+                cutoff = now - self.history_retention_days * 86400
+                self.history_repo.delete_older_than(cutoff)
+        except sqlite3.Error as e:
+            self.logger.error(f"spread_history: ошибка записи: {e}")
 
     async def _apply_slippage(self, opp: ArbitrageOpportunity):
         """
