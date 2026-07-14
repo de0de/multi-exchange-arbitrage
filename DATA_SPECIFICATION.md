@@ -1,0 +1,153 @@
+# DATA_SPECIFICATION.md — спецификация сбора исторических данных
+
+Техническое задание на сбор данных под вопросы из `QUESTIONS.md`.
+Принцип: сначала вопрос → потом данные под него, не «собирать всё на всякий
+случай». Причина жёсткого скоупинга — объём (см. раздел 2).
+
+## 1. Что уже есть (и чего не хватает)
+
+| Источник | Характер | Отвечает на | Не отвечает на |
+|---|---|---|---|
+| `{exchange}_trading_pairs` | UPSERT, последний снэпшот | текущие цены | любую историю |
+| `arbitrage_opportunities` | INSERT, история находок | Q-005 частично | Q-001..Q-003 (только то, что прошло фильтры ≥0.5%) |
+| `simulated_trades` | INSERT + UPDATE закрытия | Q-005, Q-006, Q-007 | Q-001..Q-004 |
+| `{exchange}_funding_rates` | UPSERT, последняя ставка | текущий funding | Q-004 (истории нет) |
+
+## 2. Объём: почему нельзя писать сырые котировки
+
+Замер на реальной БД (2026-07-14, 4 spot + 2 futures биржи, цикл 5 сек =
+17 280 циклов/сутки):
+
+| Вариант | Строк/цикл | Строк/сутки | Вердикт |
+|---|---|---|---|
+| A. Все котировки всех пар | 8 102 | ~140 млн | исключено |
+| B. Сырые котировки пар с ≥2 биржами (1 516 пар) | 4 211 | ~73 млн | исключено |
+| C. Сырые котировки пар со спредом ≥0.2% | ~540 | ~9.3 млн | тяжело, не нужно |
+| **D. Агрегат спреда по паре, спред ≥0.2%** | ~192 | **~3.3 млн** | **принят** |
+| **E. + 5-мин снэпшот агрегата ВСЕХ многобиржевых пар** | 1 516 × 288 | **+0.44 млн** | **принят** |
+
+Ключевое решение: хранится **одна строка на пару за цикл** (лучший bid/ask
+по всем биржам + кто их дал), а не сырые строки по каждой бирже. Для
+Q-001–Q-003 этого достаточно; сырые котировки при необходимости добавляются
+позже отдельным решением.
+
+**Оценка веса D+E:** ~3.7 млн строк/сутки × ~70 байт ≈ 260 МБ/сутки с
+индексами; 14 дней ≈ 3.5–4 ГБ. Для SQLite на VPS выполнимо ТОЛЬКО с
+retention-job (раздел 6). Это же — выполнение условия из PLAN.md 5.5
+(«потребность в аналитических запросах»): миграция PostgreSQL/TimescaleDB
+становится актуальной, выполняется отдельным заходом, не под дедлайн.
+
+## 3. Таблица `spread_history` (spot-spot, Q-001, Q-002, Q-003)
+
+```sql
+CREATE TABLE spread_history (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    standardized_pair  TEXT NOT NULL,
+    best_bid           REAL,        -- лучший bid среди бирж
+    best_bid_exchange  TEXT,
+    best_ask           REAL,        -- лучший ask среди бирж
+    best_ask_exchange  TEXT,
+    raw_spread_percent REAL,        -- (best_bid - best_ask) / best_ask * 100
+    n_exchanges        INTEGER,     -- на скольких биржах пара была свежей в этом цикле
+    is_snapshot        INTEGER DEFAULT 0,  -- 1 = запись 5-минутного полного снэпшота
+    suspected_collision INTEGER DEFAULT 0, -- спред >= порога коллизии, для Q-анализа исключать
+    timestamp          REAL NOT NULL
+);
+CREATE INDEX idx_spread_history_pair_ts ON spread_history(standardized_pair, timestamp);
+```
+
+**Правила записи (каждый цикл SpreadMonitor.scan(), данные уже в памяти —
+дополнительных HTTP-запросов нет):**
+- каждый цикл: пары с `raw_spread_percent >= 0.2` (параметр
+  `history_min_spread_percent`);
+- каждые 5 минут (`history_snapshot_interval`): все пары с ≥2 свежими биржами,
+  `is_snapshot=1`, без порога;
+- коллизии пишутся с флагом (для Q-анализов исключаются, но факт нужен для
+  диагностики данных бирж).
+
+## 4. Таблица `futures_spread_history` (Q-004, задел Фазы 2)
+
+Отдельный монитор (`FuturesSpreadMonitor`), отдельная таблица. Только
+детекция и запись — БЕЗ paper trading (Фаза 2 проектируется позже на этих
+данных). Сравнения: спот↔фьюч в рамках одной биржи (Binance: 400 общих пар,
+KuCoin: 450) и фьюч↔фьюч между биржами (592 общие пары).
+
+```sql
+CREATE TABLE futures_spread_history (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    standardized_pair  TEXT NOT NULL,
+    comparison_type    TEXT NOT NULL,   -- 'spot_futures' | 'futures_futures'
+    leg_a_exchange     TEXT NOT NULL,   -- спот-нога или фьюч-нога A
+    leg_a_bid          REAL,
+    leg_a_ask          REAL,
+    leg_b_exchange     TEXT NOT NULL,   -- фьюч-нога (или фьюч-нога B)
+    leg_b_bid          REAL,
+    leg_b_ask          REAL,
+    basis_percent      REAL,            -- (mid_b - mid_a) / mid_a * 100
+    -- Встроенный снимок funding на момент записи (решение: embedded, см. п.5)
+    leg_a_funding_rate REAL,            -- NULL для спот-ноги
+    leg_b_funding_rate REAL,
+    leg_b_next_funding_time REAL,
+    is_snapshot        INTEGER DEFAULT 0,
+    suspected_collision INTEGER DEFAULT 0, -- |basis| >= порога коллизии (20%)
+    timestamp          REAL NOT NULL
+);
+CREATE INDEX idx_futures_spread_pair_ts ON futures_spread_history(standardized_pair, timestamp);
+```
+
+**Правила записи:** аналогично п.3 — каждый цикл при |basis| ≥ 0.2%,
+полный снэпшот раз в 5 минут. **Коллизии тикеров возможны и здесь:**
+сопоставление ног идёт по текстовому `standardized_pair` (как в
+spot-мониторе), а не по дедуплицированному `pair_id`, поэтому одинаковый
+тикер спота и фьючерса может означать разные активы — детекция по тому же
+порогу 20% (|basis|), флаг `suspected_collision`, из Q-анализов исключать. Оценка объёма: ~1 442 сравнимые связки →
+снэпшоты ~0.42 млн/сутки + пороговые записи (доля basis ≥0.2% неизвестна,
+замерить в тесте; ожидание — меньше спот-спот, т.к. basis обычно <0.5%).
+
+## 5. Funding rate: embedded + история изменений
+
+Развилка (UPSERT vs INSERT, снова), решение зафиксировано:
+
+- **Embedded (принято):** снимок ставки встраивается в каждую строку
+  `futures_spread_history` — как `arbitrage_opportunities` хранит цены на
+  момент находки. Существующие UPSERT-таблицы `{exchange}_funding_rates`
+  НЕ меняются (стабильный работающий код).
+- **Плюс `funding_rate_history` (принято, т.к. почти бесплатно):** INSERT
+  только при ИЗМЕНЕНИИ ставки контракта относительно последней записанной.
+  Ставки меняются редко (порядка раз в часы); ~1 374 контракта → единицы
+  тысяч строк/сутки. Нужна для Q-004 («как funding менялся до события») по
+  контрактам, у которых в этот момент не было записываемого basis.
+
+```sql
+CREATE TABLE funding_rate_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange      TEXT NOT NULL,
+    original_pair TEXT NOT NULL,
+    funding_rate  REAL NOT NULL,
+    next_funding_time REAL,
+    timestamp     REAL NOT NULL
+);
+CREATE INDEX idx_funding_history_pair_ts ON funding_rate_history(exchange, original_pair, timestamp);
+```
+
+## 6. Retention (обязательное условие запуска на VPS)
+
+- Параметр `history_retention_days` (стартово 14).
+- Раз в сутки (в основном цикле, по времени): `DELETE FROM spread_history /
+  futures_spread_history WHERE timestamp < cutoff` + периодический
+  `PRAGMA wal_checkpoint`. `funding_rate_history` не чистится (мала).
+- Без retention диск VPS заполняется за считанные недели — это блокирующее
+  условие, не оптимизация.
+
+## 7. Что осознанно НЕ собираем (пока)
+
+- **Сырые котировки по биржам** (варианты B/C) — не требуются ни одним Q.
+- **История Order Book** — на порядки тяжелее; slippage уже встраивается в
+  `arbitrage_opportunities`/`simulated_trades` на момент событий.
+- **Историю по односторонним парам** (одна биржа) — арбитражных вопросов к ним нет.
+- **Спреды короче интервала снэпшота:** пары, чей спред не достиг 0.2%, попадают
+  в историю только раз в 5 минут — спред, живший меньше этого окна И не
+  превысивший порог, в данных не виден. При анализе Q-003 отсутствие коротких
+  подпороговых спредов в данных означает «не попали в снимок», а НЕ «их не было».
+  Параметр `history_snapshot_interval` уменьшается, если Q-003 упрётся в это
+  ограничение.
