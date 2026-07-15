@@ -33,22 +33,19 @@ class FuturesSpreadMonitor:
     main loop после обновления funding rate и сбора котировок.
     """
 
-    # (нога A, нога B): спот↔фьюч в рамках одной биржи
-    SPOT_FUTURES_PAIRS: List[Tuple[str, str]] = [
-        ("binance", "binance_futures"),
-        ("kucoin", "kucoin_futures"),
+    # Списки бирж — единственное, что редактируется при добавлении новой
+    # биржи: комбинации генерируются автоматически (см. __init__):
+    #   спот×фьюч — ВСЕ пары, включая кросс-биржевые (n_spot × n_fut),
+    #   фьюч×фьюч — все сочетания без повторов (C(n_fut, 2))
+    SPOT_EXCHANGES: List[str] = ["binance", "kucoin", "gate", "mexc"]
+    FUTURES_EXCHANGES: List[str] = [
+        "binance_futures", "kucoin_futures", "gate_futures", "mexc_futures",
     ]
-    # фьюч↔фьюч между биржами
-    FUTURES_FUTURES_PAIRS: List[Tuple[str, str]] = [
-        ("binance_futures", "kucoin_futures"),
-    ]
-    # Таблицы funding (UPSERT, обновляются main loop каждый цикл)
-    FUNDING_EXCHANGES: List[str] = ["binance_futures", "kucoin_futures"]
 
     def __init__(
         self,
         conn: sqlite3.Connection,
-        min_basis_percent: float = 0.2,
+        min_basis_percent: float = 0.5,
         snapshot_interval: float = 300.0,
         max_staleness_seconds: float = 15.0,
         allowed_quote_currencies: Optional[List[str]] = None,
@@ -69,6 +66,23 @@ class FuturesSpreadMonitor:
 
         self.history_repo = FuturesSpreadHistoryRepository(conn)
         self.funding_history_repo = FundingRateHistoryRepository(conn)
+
+        # Автогенерация сравнений из списков бирж: новая биржа в
+        # SPOT_EXCHANGES/FUTURES_EXCHANGES подхватывается без правок логики
+        self.spot_futures_pairs: List[Tuple[str, str]] = [
+            (spot, fut)
+            for spot in self.SPOT_EXCHANGES
+            for fut in self.FUTURES_EXCHANGES
+        ]
+        self.futures_futures_pairs: List[Tuple[str, str]] = [
+            (self.FUTURES_EXCHANGES[i], self.FUTURES_EXCHANGES[j])
+            for i in range(len(self.FUTURES_EXCHANGES))
+            for j in range(i + 1, len(self.FUTURES_EXCHANGES))
+        ]
+        self.logger.info(
+            f"FuturesSpreadMonitor: {len(self.spot_futures_pairs)} спот-фьюч + "
+            f"{len(self.futures_futures_pairs)} фьюч-фьюч сравнений"
+        )
 
         # Правило записи изменений funding: биржи отдают ПРОГНОЗНЫЕ ставки,
         # которые дрейфуют на 1e-6..1e-5 каждый цикл (замер 2026-07-14:
@@ -122,7 +136,7 @@ class FuturesSpreadMonitor:
         {(exchange_key, standardized_pair): {rate, next_time, original_pair}}.
         """
         funding = {}
-        for exchange_key in self.FUNDING_EXCHANGES:
+        for exchange_key in self.FUTURES_EXCHANGES:
             table = f"{exchange_key}_funding_rates"
             try:
                 self.cursor.execute(f"""
@@ -163,8 +177,8 @@ class FuturesSpreadMonitor:
 
         rows: List[tuple] = []
         comparisons = (
-            [("spot_futures", a, b) for a, b in self.SPOT_FUTURES_PAIRS]
-            + [("futures_futures", a, b) for a, b in self.FUTURES_FUTURES_PAIRS]
+            [("spot_futures", a, b) for a, b in self.spot_futures_pairs]
+            + [("futures_futures", a, b) for a, b in self.futures_futures_pairs]
         )
 
         for comparison_type, a_key, b_key in comparisons:
@@ -179,8 +193,16 @@ class FuturesSpreadMonitor:
                     continue
                 basis = (mid_b - mid_a) / mid_a * 100.0
 
-                if not snapshot_due and abs(basis) < self.min_basis_percent:
-                    continue
+                suspected_collision = abs(basis) >= self.collision_threshold
+
+                # Пороговая запись (каждый цикл) — только для заметных
+                # НЕ-коллизионных всплесков: структурные basis 0.2-0.5% между
+                # биржами перманентны (замер: 22 сравнения дают бы 46 млн
+                # строк/сутки на пороге 0.2%), их полная картина есть в
+                # 5-минутных снэпшотах; коллизии фиксируются только в снэпшотах
+                if not snapshot_due:
+                    if abs(basis) < self.min_basis_percent or suspected_collision:
+                        continue
 
                 fund_a = funding.get((a_key, std_pair)) if comparison_type == "futures_futures" else None
                 fund_b = funding.get((b_key, std_pair))
@@ -197,7 +219,7 @@ class FuturesSpreadMonitor:
                     fund_b["rate"] if fund_b else None,
                     fund_b["next_time"] if fund_b else None,
                     1 if snapshot_due else 0,
-                    1 if abs(basis) >= self.collision_threshold else 0,
+                    1 if suspected_collision else 0,
                     now,
                 ))
 
