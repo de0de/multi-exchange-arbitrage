@@ -20,25 +20,26 @@ import csv
 import gzip
 import logging
 import os
-import sqlite3
 import time
 from datetime import datetime
 from typing import Tuple
+
+import psycopg
 
 
 class HistoryArchiver:
     """Ежесуточный экспорт+retention растущих таблиц истории."""
 
     TABLES: Tuple[Tuple[str, str], ...] = (
-        ("spread_history", "timestamp < ?"),
-        ("futures_spread_history", "timestamp < ?"),
+        ("spread_history", "timestamp < %s"),
+        ("futures_spread_history", "timestamp < %s"),
         ("arbitrage_opportunities",
-         "timestamp < ? AND id NOT IN (SELECT opportunity_id FROM simulated_trades)"),
+         "timestamp < %s AND id NOT IN (SELECT opportunity_id FROM simulated_trades)"),
     )
 
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: psycopg.Connection,
         archive_dir: str = "data/archive",
         retention_days: float = 14.0,
         check_interval: float = 86400.0,
@@ -67,14 +68,11 @@ class HistoryArchiver:
         for table, where in self.TABLES:
             try:
                 self._archive_table(table, where, (cutoff,))
-            except (sqlite3.Error, OSError) as e:
+            except (psycopg.Error, OSError) as e:
+                self.conn.rollback()
                 self.logger.error(
                     f"Архивация {table} не удалась, строки НЕ удалены: {e}"
                 )
-        try:
-            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except sqlite3.Error:
-            pass
         return True
 
     def _archive_table(self, table: str, where: str, params: tuple):

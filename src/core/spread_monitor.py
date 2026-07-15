@@ -5,12 +5,13 @@
 рассчитывает спред с учётом комиссий, фильтрует по объёму и свежести данных,
 опционально загружает Order Book depth для учёта проскальзывания.
 
-Использует единое соединение sqlite3 из main.py.
+Использует единое соединение с БД (psycopg) из main.py.
 """
 import asyncio
 import logging
-import sqlite3
 import time
+
+import psycopg
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -66,7 +67,7 @@ class SpreadMonitor:
 
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: psycopg.Connection,
         apis: Dict[str, object],
         order_book_repos: Dict[str, OrderBookRepository],
         order_book_collector: OrderBookCollector,
@@ -132,7 +133,8 @@ class SpreadMonitor:
             self.logger.info(
                 f"Loaded exchange fees: {self._exchange_fees}"
             )
-        except sqlite3.Error as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.warning(f"Could not load exchange fees from DB: {e}. Using defaults.")
             self._exchange_fees = {
                 "Binance": 0.001,
@@ -162,7 +164,8 @@ class SpreadMonitor:
             """)
             columns = [desc[0] for desc in self.cursor.description]
             return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
-        except sqlite3.OperationalError as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.warning(f"Cannot read table {table}: {e}")
             return []
 
@@ -492,7 +495,8 @@ class SpreadMonitor:
                 )
             elif history_rows:
                 self.logger.debug(f"spread_history: записано {len(history_rows)} строк")
-        except sqlite3.Error as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.error(f"spread_history: ошибка записи: {e}")
 
     async def _apply_slippage(self, opp: ArbitrageOpportunity):
@@ -570,12 +574,13 @@ class SpreadMonitor:
         table = f"{exchange_key}_trading_pairs"
         try:
             self.cursor.execute(
-                f"SELECT original_pair FROM {table} WHERE standardized_pair = ? LIMIT 1",
+                f"SELECT original_pair FROM {table} WHERE standardized_pair = %s LIMIT 1",
                 (standardized_pair,)
             )
             row = self.cursor.fetchone()
             return row[0] if row else None
-        except sqlite3.OperationalError as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.debug(f"Cannot read {table}: {e}")
             return None
 

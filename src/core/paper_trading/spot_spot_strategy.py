@@ -25,9 +25,10 @@ net_profit_percent по нескольким точкам объёма (volume_c
 """
 import json
 import logging
-import sqlite3
 import time
 from datetime import datetime
+
+import psycopg
 from typing import List, Optional, Tuple
 
 from config.transfer_config import TransferInfo, get_transfer_info
@@ -56,7 +57,7 @@ class SpotSpotStrategy(BasePaperTradingStrategy):
 
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: psycopg.Connection,
         spread_monitor: SpreadMonitor,
         trade_repo: SimulatedTradeRepository,
         trade_size_usdt: float = 1000.0,
@@ -374,10 +375,11 @@ class SpotSpotStrategy(BasePaperTradingStrategy):
         table = f"{exchange_key}_trading_pairs"
         try:
             self.cursor.execute(
-                f"SELECT bid, ask, timestamp FROM {table} WHERE standardized_pair = ? LIMIT 1",
+                f"SELECT bid, ask, timestamp FROM {table} WHERE standardized_pair = %s LIMIT 1",
                 (standardized_pair,),
             )
-        except sqlite3.OperationalError as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.debug(f"Paper trading: не читается {table}: {e}")
             return None
         row = self.cursor.fetchone()

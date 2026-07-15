@@ -5,17 +5,18 @@
 Снимок funding rate встраивается в каждую строку (embedded-решение из
 раздела 5 спецификации) — существующие UPSERT-таблицы funding не трогаются.
 
-Использует единое соединение sqlite3, переданное из main.py.
+Использует единое соединение (psycopg), переданное из main.py.
 """
 import logging
-import sqlite3
 from typing import List, Tuple
+
+import psycopg
 
 
 class FuturesSpreadHistoryRepository:
     """INSERT-only история basis + retention-очистка."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: psycopg.Connection):
         self.conn = conn
         self.cursor = conn.cursor()
         self.logger = logging.getLogger(__name__)
@@ -24,22 +25,22 @@ class FuturesSpreadHistoryRepository:
     def _create_table(self):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS futures_spread_history (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                id                 BIGSERIAL PRIMARY KEY,
                 standardized_pair  TEXT NOT NULL,
                 comparison_type    TEXT NOT NULL,
                 leg_a_exchange     TEXT NOT NULL,
-                leg_a_bid          REAL,
-                leg_a_ask          REAL,
+                leg_a_bid          DOUBLE PRECISION,
+                leg_a_ask          DOUBLE PRECISION,
                 leg_b_exchange     TEXT NOT NULL,
-                leg_b_bid          REAL,
-                leg_b_ask          REAL,
-                basis_percent      REAL,
-                leg_a_funding_rate REAL,
-                leg_b_funding_rate REAL,
-                leg_b_next_funding_time REAL,
+                leg_b_bid          DOUBLE PRECISION,
+                leg_b_ask          DOUBLE PRECISION,
+                basis_percent      DOUBLE PRECISION,
+                leg_a_funding_rate DOUBLE PRECISION,
+                leg_b_funding_rate DOUBLE PRECISION,
+                leg_b_next_funding_time DOUBLE PRECISION,
                 is_snapshot        INTEGER DEFAULT 0,
                 suspected_collision INTEGER DEFAULT 0,
-                timestamp          REAL NOT NULL
+                timestamp          DOUBLE PRECISION NOT NULL
             )
         """)
         self.cursor.execute("""
@@ -66,18 +67,17 @@ class FuturesSpreadHistoryRepository:
                 basis_percent,
                 leg_a_funding_rate, leg_b_funding_rate, leg_b_next_funding_time,
                 is_snapshot, suspected_collision, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, rows)
         self.conn.commit()
 
     def delete_older_than(self, cutoff_timestamp: float) -> int:
-        """Retention (см. DATA_SPECIFICATION.md, раздел 6)."""
+        """Retention (см. DATA_SPECIFICATION.md, раздел 6) — вызывается HistoryArchiver."""
         self.cursor.execute(
-            "DELETE FROM futures_spread_history WHERE timestamp < ?", (cutoff_timestamp,)
+            "DELETE FROM futures_spread_history WHERE timestamp < %s", (cutoff_timestamp,)
         )
         deleted = self.cursor.rowcount
         self.conn.commit()
         if deleted > 0:
-            self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             self.logger.info(f"futures_spread_history retention: удалено {deleted} записей")
         return deleted

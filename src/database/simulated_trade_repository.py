@@ -5,11 +5,12 @@
 Поля пары/бирж/цен обнаружения не дублируются: для дедупликации
 и закрытия позиций используется JOIN с arbitrage_opportunities.
 
-Использует единое соединение sqlite3, переданное из main.py.
+Использует единое соединение (psycopg), переданное из main.py.
 """
 import logging
-import sqlite3
 from typing import List, Optional
+
+import psycopg
 
 from src.core.models.simulated_trade import SimulatedTrade, STATUS_OPEN, STATUS_CLOSED
 
@@ -17,7 +18,7 @@ from src.core.models.simulated_trade import SimulatedTrade, STATUS_OPEN, STATUS_
 class SimulatedTradeRepository:
     """Сохранение, поиск открытых и закрытие симулированных сделок."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: psycopg.Connection):
         self.conn = conn
         self.cursor = conn.cursor()
         self.logger = logging.getLogger(__name__)
@@ -26,29 +27,29 @@ class SimulatedTradeRepository:
     def _create_table(self):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS simulated_trades (
-                id                        INTEGER PRIMARY KEY AUTOINCREMENT,
-                opportunity_id            INTEGER NOT NULL REFERENCES arbitrage_opportunities(id),
+                id                        BIGSERIAL PRIMARY KEY,
+                opportunity_id            BIGINT NOT NULL REFERENCES arbitrage_opportunities(id),
                 status                    TEXT NOT NULL DEFAULT 'open',
-                entry_detected_at         REAL NOT NULL,
+                entry_detected_at         DOUBLE PRECISION NOT NULL,
                 entry_readable_time       TEXT,
-                requested_volume_usdt     REAL NOT NULL,
-                executed_volume_usdt      REAL NOT NULL,
+                requested_volume_usdt     DOUBLE PRECISION NOT NULL,
+                executed_volume_usdt      DOUBLE PRECISION NOT NULL,
                 partial_fill              INTEGER DEFAULT 0,
-                entry_buy_price_effective REAL,
-                base_amount               REAL,
+                entry_buy_price_effective DOUBLE PRECISION,
+                base_amount               DOUBLE PRECISION,
                 transfer_network          TEXT,
-                expected_transfer_seconds REAL,
-                hypothetical_close_at     REAL NOT NULL,
-                withdrawal_fee_coin       REAL,
-                withdrawal_fee_usdt       REAL,
+                expected_transfer_seconds DOUBLE PRECISION,
+                hypothetical_close_at     DOUBLE PRECISION NOT NULL,
+                withdrawal_fee_coin       DOUBLE PRECISION,
+                withdrawal_fee_usdt       DOUBLE PRECISION,
                 fee_unknown               INTEGER DEFAULT 0,
                 volume_curve              TEXT,
-                closed_at                 REAL,
+                closed_at                 DOUBLE PRECISION,
                 close_readable_time       TEXT,
-                close_price_buy           REAL,
-                close_price_sell          REAL,
-                realized_profit_usdt      REAL,
-                realized_profit_percent   REAL,
+                close_price_buy           DOUBLE PRECISION,
+                close_price_sell          DOUBLE PRECISION,
+                realized_profit_usdt      DOUBLE PRECISION,
+                realized_profit_percent   DOUBLE PRECISION,
                 outcome                   TEXT
             )
         """)
@@ -69,7 +70,8 @@ class SimulatedTradeRepository:
                 transfer_network, expected_transfer_seconds, hypothetical_close_at,
                 withdrawal_fee_coin, withdrawal_fee_usdt, fee_unknown,
                 volume_curve
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
         """, (
             trade.opportunity_id,
             trade.status,
@@ -88,8 +90,8 @@ class SimulatedTradeRepository:
             1 if trade.fee_unknown else 0,
             trade.volume_curve,
         ))
+        trade.id = self.cursor.fetchone()[0]
         self.conn.commit()
-        trade.id = self.cursor.lastrowid
         return trade.id
 
     def has_open_trade(self, standardized_pair: str, exchange_buy: str, exchange_sell: str) -> bool:
@@ -101,10 +103,10 @@ class SimulatedTradeRepository:
             SELECT 1
             FROM simulated_trades st
             JOIN arbitrage_opportunities ao ON ao.id = st.opportunity_id
-            WHERE st.status = ?
-              AND ao.standardized_pair = ?
-              AND ao.exchange_buy = ?
-              AND ao.exchange_sell = ?
+            WHERE st.status = %s
+              AND ao.standardized_pair = %s
+              AND ao.exchange_buy = %s
+              AND ao.exchange_sell = %s
             LIMIT 1
         """, (STATUS_OPEN, standardized_pair, exchange_buy, exchange_sell))
         return self.cursor.fetchone() is not None
@@ -127,7 +129,7 @@ class SimulatedTradeRepository:
                    ao.buy_exchange_fee_percent, ao.sell_exchange_fee_percent
             FROM simulated_trades st
             JOIN arbitrage_opportunities ao ON ao.id = st.opportunity_id
-            WHERE st.status = ? AND st.hypothetical_close_at <= ?
+            WHERE st.status = %s AND st.hypothetical_close_at <= %s
         """, (STATUS_OPEN, now))
         columns = [desc[0] for desc in self.cursor.description]
         return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
@@ -146,15 +148,15 @@ class SimulatedTradeRepository:
         """Проставляет результат закрытия и переводит сделку в status='closed'."""
         self.cursor.execute("""
             UPDATE simulated_trades
-            SET status = ?,
-                closed_at = ?,
-                close_readable_time = ?,
-                outcome = ?,
-                close_price_buy = ?,
-                close_price_sell = ?,
-                realized_profit_usdt = ?,
-                realized_profit_percent = ?
-            WHERE id = ?
+            SET status = %s,
+                closed_at = %s,
+                close_readable_time = %s,
+                outcome = %s,
+                close_price_buy = %s,
+                close_price_sell = %s,
+                realized_profit_usdt = %s,
+                realized_profit_percent = %s
+            WHERE id = %s
         """, (
             STATUS_CLOSED,
             closed_at,

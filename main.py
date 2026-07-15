@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import sqlite3
 import signal
 import time
 
@@ -35,7 +34,7 @@ from src.core.futures_spread_monitor import FuturesSpreadMonitor
 from src.core.paper_trading.spot_spot_strategy import SpotSpotStrategy
 from src.utils.logger import setup_logging
 from src.utils.health_monitor import health_monitor
-from config.settings import DATABASE_URL
+from src.database import db
 
 # Обработчики сигналов для корректного завершения
 shutdown_event = asyncio.Event()
@@ -59,10 +58,9 @@ async def main():
 
     logger.info("Запуск приложения для арбитража криптовалют")
 
-    # Создаем единое подключение к базе данных
-    db_path = DATABASE_URL.replace('sqlite:///', '')
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    # Создаем единое подключение к базе данных (PostgreSQL/TimescaleDB,
+    # docker-compose.yml; настройки - config/settings.py / .env)
+    conn = db.connect()
 
     # Создаем экземпляры API
     binance_api = BinanceSpotAPI()
@@ -76,31 +74,34 @@ async def main():
 
     # Создаем экземпляры репозиториев с общим подключением
     logger.info("Инициализация репозиториев")
-    market_repo_binance = MarketRepository(db_path, "binance")
-    market_repo_binance_futures = MarketRepository(db_path, "binance_futures")
-    market_repo_kucoin = MarketRepository(db_path, "kucoin")
-    market_repo_kucoin_futures = MarketRepository(db_path, "kucoin_futures")
-    market_repo_gate = MarketRepository(db_path, "gate")
-    market_repo_gate_futures = MarketRepository(db_path, "gate_futures")
-    market_repo_mexc = MarketRepository(db_path, "mexc")
-    market_repo_mexc_futures = MarketRepository(db_path, "mexc_futures")
-    funding_repo_binance_futures = FundingRateRepository(db_path, "binance_futures")
-    funding_repo_kucoin_futures = FundingRateRepository(db_path, "kucoin_futures")
-    funding_repo_gate_futures = FundingRateRepository(db_path, "gate_futures")
-    funding_repo_mexc_futures = FundingRateRepository(db_path, "mexc_futures")
+    # Порядок важен: exchanges/currencies/unique_pairs создаются первыми,
+    # на них смотрят запросы остальных репозиториев
+    exchanges_repo = ExchangesRepository(conn)
     currencies_repo = CurrenciesRepository(conn)
-    exchanges_repo = ExchangesRepository(db_path)
     trading_pairs_repo = TradingPairsRepository(conn)
+    market_repo_binance = MarketRepository(conn, "binance")
+    market_repo_binance_futures = MarketRepository(conn, "binance_futures")
+    market_repo_kucoin = MarketRepository(conn, "kucoin")
+    market_repo_kucoin_futures = MarketRepository(conn, "kucoin_futures")
+    market_repo_gate = MarketRepository(conn, "gate")
+    market_repo_gate_futures = MarketRepository(conn, "gate_futures")
+    market_repo_mexc = MarketRepository(conn, "mexc")
+    market_repo_mexc_futures = MarketRepository(conn, "mexc_futures")
+    funding_repo_binance_futures = FundingRateRepository(conn, "binance_futures")
+    funding_repo_kucoin_futures = FundingRateRepository(conn, "kucoin_futures")
+    funding_repo_gate_futures = FundingRateRepository(conn, "gate_futures")
+    funding_repo_mexc_futures = FundingRateRepository(conn, "mexc_futures")
 
-    # Создаем репозитории Order Book (каждый со своим соединением)
-    order_book_repo_binance = OrderBookRepository(db_path, "binance")
-    order_book_repo_binance_futures = OrderBookRepository(db_path, "binance_futures")
-    order_book_repo_kucoin = OrderBookRepository(db_path, "kucoin")
-    order_book_repo_kucoin_futures = OrderBookRepository(db_path, "kucoin_futures")
-    order_book_repo_gate = OrderBookRepository(db_path, "gate")
-    order_book_repo_gate_futures = OrderBookRepository(db_path, "gate_futures")
-    order_book_repo_mexc = OrderBookRepository(db_path, "mexc")
-    order_book_repo_mexc_futures = OrderBookRepository(db_path, "mexc_futures")
+    # Репозитории Order Book (общее соединение — PostgreSQL штатно
+    # обслуживает всех писателей процесса)
+    order_book_repo_binance = OrderBookRepository(conn, "binance")
+    order_book_repo_binance_futures = OrderBookRepository(conn, "binance_futures")
+    order_book_repo_kucoin = OrderBookRepository(conn, "kucoin")
+    order_book_repo_kucoin_futures = OrderBookRepository(conn, "kucoin_futures")
+    order_book_repo_gate = OrderBookRepository(conn, "gate")
+    order_book_repo_gate_futures = OrderBookRepository(conn, "gate_futures")
+    order_book_repo_mexc = OrderBookRepository(conn, "mexc")
+    order_book_repo_mexc_futures = OrderBookRepository(conn, "mexc_futures")
 
     # Создаем OrderBookCollector и регистрируем источники
     ob_collector = OrderBookCollector()
@@ -157,7 +158,7 @@ async def main():
 
     # Суточная сводка в лог (первая — при старте): счётчики всех потоков
     # данных и paper trading, размер БД
-    daily_report = DailyReport(conn, db_path)
+    daily_report = DailyReport(conn)
 
     # Мониторинг спот-фьюч / фьюч-фьюч basis: только запись истории
     # (futures_spread_history, funding_rate_history), без симуляции —
@@ -307,6 +308,15 @@ async def main():
                 funding_repo_mexc_futures.save_funding_rates(mf_funding)
                 logger.debug(f"Saved {len(mf_funding)} funding rates from MEXC Futures")
 
+            # Запись спот-фьюч / фьюч-фьюч basis-истории.
+            # ВАЖНО: сразу после сохранения funding (снимок текущего цикла) и
+            # ДО спот-скана с paper trading — те занимают десятки секунд, и
+            # данные ног успели бы протухнуть для фильтра свежести
+            try:
+                futures_spread_monitor.scan()
+            except Exception as e:
+                logger.error(f"FuturesSpreadMonitor: ошибка сканирования: {e}")
+
             # Мониторинг спредов (сканирование найденных расхождений)
             logger.debug("Сканирование арбитражных возможностей...")
             opportunities = await spread_monitor.scan()
@@ -320,14 +330,6 @@ async def main():
             # Paper trading: закрываем позиции, у которых истекло время перевода
             # (проверяется каждый цикл, независимо от наличия новых возможностей)
             await paper_strategy.close_ready_positions()
-
-            # Запись спот-фьюч / фьюч-фьюч basis-истории.
-            # ВАЖНО: вызывается после сохранения funding rate выше по циклу —
-            # снимок funding в записях относится к текущему циклу, не прошлому
-            try:
-                futures_spread_monitor.scan()
-            except Exception as e:
-                logger.error(f"FuturesSpreadMonitor: ошибка сканирования: {e}")
 
             # Ежесуточная архивация+retention истории (экспорт в data/archive)
             history_archiver.run_if_due()
@@ -359,18 +361,7 @@ async def main():
         await gate_futures_api.close_session()
         await mexc_api.close_session()
         await mexc_futures_api.close_session()
-        funding_repo_binance_futures.close()
-        funding_repo_kucoin_futures.close()
-        funding_repo_gate_futures.close()
-        funding_repo_mexc_futures.close()
-        order_book_repo_binance.close()
-        order_book_repo_binance_futures.close()
-        order_book_repo_kucoin.close()
-        order_book_repo_kucoin_futures.close()
-        order_book_repo_gate.close()
-        order_book_repo_gate_futures.close()
-        order_book_repo_mexc.close()
-        order_book_repo_mexc_futures.close()
+        # Все репозитории работают через единое соединение — закрывается одно
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")
 

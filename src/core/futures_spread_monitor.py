@@ -19,9 +19,10 @@
 standardized_pair): |basis| >= порога -> флаг suspected_collision.
 """
 import logging
-import sqlite3
 import time
 from typing import Dict, List, Optional, Tuple
+
+import psycopg
 
 from src.database.futures_spread_history_repository import FuturesSpreadHistoryRepository
 from src.database.funding_rate_history_repository import FundingRateHistoryRepository
@@ -44,7 +45,7 @@ class FuturesSpreadMonitor:
 
     def __init__(
         self,
-        conn: sqlite3.Connection,
+        conn: psycopg.Connection,
         min_basis_percent: float = 0.5,
         snapshot_interval: float = 300.0,
         max_staleness_seconds: float = 15.0,
@@ -115,7 +116,8 @@ class FuturesSpreadMonitor:
                 SELECT standardized_pair, bid, ask, quote_currency, timestamp
                 FROM {table}
             """)
-        except sqlite3.OperationalError as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.warning(f"FuturesSpreadMonitor: не читается {table}: {e}")
             return {}
 
@@ -143,7 +145,8 @@ class FuturesSpreadMonitor:
                     SELECT standardized_pair, original_pair, funding_rate, next_funding_time
                     FROM {table}
                 """)
-            except sqlite3.OperationalError as e:
+            except psycopg.Error as e:
+                self.conn.rollback()
                 self.logger.debug(f"FuturesSpreadMonitor: не читается {table}: {e}")
                 continue
             for std_pair, orig_pair, rate, next_time in self.cursor.fetchall():
@@ -233,7 +236,8 @@ class FuturesSpreadMonitor:
             elif rows:
                 self.logger.debug(f"futures_spread_history: записано {len(rows)} строк")
             # Retention-очисткой владеет HistoryArchiver (экспорт перед удалением)
-        except sqlite3.Error as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.error(f"futures_spread_history: ошибка записи: {e}")
 
     def _record_funding_changes(self, funding: Dict[Tuple[str, str], dict], now: float):
@@ -259,5 +263,6 @@ class FuturesSpreadMonitor:
             changes.append((exchange_key, key[1], info["rate"], info["next_time"], now))
         try:
             self.funding_history_repo.save_changes(changes)
-        except sqlite3.Error as e:
+        except psycopg.Error as e:
+            self.conn.rollback()
             self.logger.error(f"funding_rate_history: ошибка записи: {e}")

@@ -1,8 +1,8 @@
-import os
-import sqlite3
 import logging
 from datetime import datetime
 from typing import List
+
+import psycopg
 
 from src.core.models.order_book_data import OrderBookData, OrderBookLevel
 
@@ -14,33 +14,25 @@ class OrderBookRepository:
     Хранит bid/ask уровни как JSON-строку в одной строке на пару (upsert).
     """
 
-    def __init__(self, db_path: str, exchange_name: str):
-        self.db_path = db_path
+    def __init__(self, conn: psycopg.Connection, exchange_name: str):
+        self.conn = conn
+        self.cursor = conn.cursor()
         self.exchange_name = exchange_name.lower()
-        self.conn: sqlite3.Connection
         self.logger = logging.getLogger(__name__)
-        self._connect()
         self._create_table()
-
-    def _connect(self):
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.cursor = self.conn.cursor()
 
     def _create_table(self):
         table_name = f"{self.exchange_name}_order_book"
         self.cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS {table_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                exchange_id INTEGER,
+                id BIGSERIAL PRIMARY KEY,
+                exchange_id BIGINT,
                 original_pair TEXT,
                 standardized_pair TEXT,
                 bids TEXT,
                 asks TEXT,
-                timestamp REAL,
+                timestamp DOUBLE PRECISION,
                 readable_time TEXT,
-                FOREIGN KEY (exchange_id) REFERENCES exchanges(id),
                 UNIQUE(exchange_id, original_pair)
             )
         ''')
@@ -52,7 +44,7 @@ class OrderBookRepository:
 
         # Получаем exchange_id
         self.cursor.execute(
-            'SELECT id FROM exchanges WHERE name = ?', (order_book.exchange,)
+            'SELECT id FROM exchanges WHERE name = %s', (order_book.exchange,)
         )
         row = self.cursor.fetchone()
         if row:
@@ -77,8 +69,8 @@ class OrderBookRepository:
 
         self.cursor.execute(f'''
             UPDATE {table_name}
-            SET bids = ?, asks = ?, timestamp = ?, readable_time = ?
-            WHERE exchange_id = ? AND original_pair = ?
+            SET bids = %s, asks = %s, timestamp = %s, readable_time = %s
+            WHERE exchange_id = %s AND original_pair = %s
         ''', (
             bids_json, asks_json, ts, rt,
             exchange_id, order_book.original_pair
@@ -88,7 +80,7 @@ class OrderBookRepository:
                 INSERT INTO {table_name} (
                     exchange_id, original_pair, standardized_pair,
                     bids, asks, timestamp, readable_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             ''', (
                 exchange_id, order_book.original_pair, order_book.standardized_pair,
                 bids_json, asks_json, ts, rt
@@ -107,7 +99,7 @@ class OrderBookRepository:
         table_name = f"{self.exchange_name}_order_book"
         self.cursor.execute(
             f'''SELECT exchange_id, original_pair, standardized_pair, bids, asks, timestamp, readable_time
-                FROM {table_name} WHERE original_pair = ?''',
+                FROM {table_name} WHERE original_pair = %s''',
             (original_pair,)
         )
         row = self.cursor.fetchone()
@@ -133,8 +125,4 @@ class OrderBookRepository:
         """Сохраняет список order books."""
         for ob in order_books:
             self.save_order_book(ob)
-        self.logger.info(f"Saved {len(order_books)} order books in the database")
-
-    def close(self):
-        self.conn.close()
-        self.logger.info("OrderBookRepository connection closed")
+        self.logger.debug(f"Saved {len(order_books)} order books in the database")

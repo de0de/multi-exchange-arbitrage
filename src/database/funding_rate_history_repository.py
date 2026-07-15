@@ -2,22 +2,21 @@
 Репозиторий истории изменений funding rate.
 
 Таблица: funding_rate_history — см. DATA_SPECIFICATION.md, раздел 5.
-INSERT происходит ТОЛЬКО при изменении ставки контракта относительно
-последней записанной (ставки меняются редко — таблица мала, retention
-не требуется). Существующие UPSERT-таблицы {exchange}_funding_rates
-не изменяются.
+INSERT происходит с фильтром дрейфа (правило — в FuturesSpreadMonitor).
+Существующие UPSERT-таблицы {exchange}_funding_rates не изменяются.
 
-Использует единое соединение sqlite3, переданное из main.py.
+Использует единое соединение (psycopg), переданное из main.py.
 """
 import logging
-import sqlite3
 from typing import Dict, List, Tuple
+
+import psycopg
 
 
 class FundingRateHistoryRepository:
     """INSERT-on-change история funding rate."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: psycopg.Connection):
         self.conn = conn
         self.cursor = conn.cursor()
         self.logger = logging.getLogger(__name__)
@@ -26,12 +25,12 @@ class FundingRateHistoryRepository:
     def _create_table(self):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS funding_rate_history (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                id            BIGSERIAL PRIMARY KEY,
                 exchange      TEXT NOT NULL,
                 original_pair TEXT NOT NULL,
-                funding_rate  REAL NOT NULL,
-                next_funding_time REAL,
-                timestamp     REAL NOT NULL
+                funding_rate  DOUBLE PRECISION NOT NULL,
+                next_funding_time DOUBLE PRECISION,
+                timestamp     DOUBLE PRECISION NOT NULL
             )
         """)
         self.cursor.execute("""
@@ -67,7 +66,7 @@ class FundingRateHistoryRepository:
         self.cursor.executemany("""
             INSERT INTO funding_rate_history (
                 exchange, original_pair, funding_rate, next_funding_time, timestamp
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s)
         """, rows)
         self.conn.commit()
         self.logger.debug(f"funding_rate_history: записано {len(rows)} изменений ставок")

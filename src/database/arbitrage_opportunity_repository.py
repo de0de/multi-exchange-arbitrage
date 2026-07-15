@@ -6,9 +6,10 @@
 """
 import json
 import logging
-import sqlite3
 from datetime import datetime
 from typing import List, Optional
+
+import psycopg
 
 from src.core.models.arbitrage_opportunity import ArbitrageOpportunity, SlippageInfo
 
@@ -17,10 +18,10 @@ class ArbitrageOpportunityRepository:
     """
     Сохраняет и загружает арбитражные возможности в/из БД.
 
-    Использует единое соединение sqlite3, переданное из main.py.
+    Использует единое соединение (psycopg), переданное из main.py.
     """
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: psycopg.Connection):
         self.conn = conn
         self.cursor = conn.cursor()
         self.logger = logging.getLogger(__name__)
@@ -29,29 +30,29 @@ class ArbitrageOpportunityRepository:
     def _create_table(self):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS arbitrage_opportunities (
-                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                id                     BIGSERIAL PRIMARY KEY,
                 standardized_pair      TEXT NOT NULL,
                 base_currency          TEXT,
                 quote_currency         TEXT,
                 exchange_buy           TEXT NOT NULL,
                 exchange_sell          TEXT NOT NULL,
-                buy_price              REAL,
-                sell_price             REAL,
-                raw_spread_percent     REAL,
-                buy_exchange_fee_percent  REAL,
-                sell_exchange_fee_percent REAL,
-                net_spread_percent     REAL,
-                max_buy_volume_usdt    REAL,
-                max_sell_volume_usdt   REAL,
-                trade_volume_usdt      REAL,
-                buy_volume_original    REAL,
-                sell_volume_original   REAL,
+                buy_price              DOUBLE PRECISION,
+                sell_price             DOUBLE PRECISION,
+                raw_spread_percent     DOUBLE PRECISION,
+                buy_exchange_fee_percent  DOUBLE PRECISION,
+                sell_exchange_fee_percent DOUBLE PRECISION,
+                net_spread_percent     DOUBLE PRECISION,
+                max_buy_volume_usdt    DOUBLE PRECISION,
+                max_sell_volume_usdt   DOUBLE PRECISION,
+                trade_volume_usdt      DOUBLE PRECISION,
+                buy_volume_original    DOUBLE PRECISION,
+                sell_volume_original   DOUBLE PRECISION,
                 slippage_available     INTEGER DEFAULT 0,
                 buy_slippage           TEXT,
                 sell_slippage          TEXT,
-                net_spread_with_slippage_percent REAL,
-                slippage_limited_volume_usdt REAL,
-                timestamp              REAL,
+                net_spread_with_slippage_percent DOUBLE PRECISION,
+                slippage_limited_volume_usdt DOUBLE PRECISION,
+                timestamp              DOUBLE PRECISION,
                 readable_time          TEXT,
                 suspected_collision    INTEGER DEFAULT 0
             )
@@ -80,7 +81,8 @@ class ArbitrageOpportunityRepository:
                 slippage_limited_volume_usdt,
                 timestamp, readable_time,
                 suspected_collision
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
         """, (
             opp.standardized_pair,
             opp.base_currency,
@@ -115,8 +117,9 @@ class ArbitrageOpportunityRepository:
             opp.readable_time,
             1 if opp.suspected_collision else 0,
         ))
+        opportunity_id = self.cursor.fetchone()[0]
         self.conn.commit()
-        return self.cursor.lastrowid
+        return opportunity_id
 
     def save_opportunities(self, opportunities: List[ArbitrageOpportunity]) -> List[int]:
         """Сохраняет список арбитражных возможностей. Возвращает список id."""
