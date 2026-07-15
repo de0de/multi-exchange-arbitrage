@@ -10,6 +10,7 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/archive/
+HANDOFF.md
 logs/
 tmp_test_*.py
 scratch_*.py
