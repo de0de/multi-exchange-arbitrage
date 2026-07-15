@@ -9,13 +9,17 @@ from src.api.exchanges.cex.binance.binance_futures_api import BinanceFuturesAPI
 from src.api.exchanges.cex.kucoin.kucoin_spot_api import KuCoinSpotAPI
 from src.api.exchanges.cex.kucoin.kucoin_futures_api import KuCoinFuturesAPI
 from src.api.exchanges.cex.gate.gate_spot_api import GateSpotAPI
+from src.api.exchanges.cex.gate.gate_futures_api import GateFuturesAPI
 from src.api.exchanges.cex.mexc.mexc_spot_api import MexcSpotAPI
+from src.api.exchanges.cex.mexc.mexc_futures_api import MexcFuturesAPI
 from src.data.collectors.cex.binance_collector import BinanceCollector
 from src.data.collectors.cex.binance_futures_collector import BinanceFuturesCollector
 from src.data.collectors.cex.kucoin_collector import KuCoinCollector
 from src.data.collectors.cex.kucoin_futures_collector import KuCoinFuturesCollector
 from src.data.collectors.cex.gate_collector import GateCollector
+from src.data.collectors.cex.gate_futures_collector import GateFuturesCollector
 from src.data.collectors.cex.mexc_collector import MexcCollector
+from src.data.collectors.cex.mexc_futures_collector import MexcFuturesCollector
 from src.data.collectors.cex.order_book_collector import OrderBookCollector
 from src.data.history_archiver import HistoryArchiver
 from src.utils.daily_report import DailyReport
@@ -66,7 +70,9 @@ async def main():
     kucoin_api = KuCoinSpotAPI()
     kucoin_futures_api = KuCoinFuturesAPI()
     gate_api = GateSpotAPI()
+    gate_futures_api = GateFuturesAPI()
     mexc_api = MexcSpotAPI()
+    mexc_futures_api = MexcFuturesAPI()
 
     # Создаем экземпляры репозиториев с общим подключением
     logger.info("Инициализация репозиториев")
@@ -75,9 +81,13 @@ async def main():
     market_repo_kucoin = MarketRepository(db_path, "kucoin")
     market_repo_kucoin_futures = MarketRepository(db_path, "kucoin_futures")
     market_repo_gate = MarketRepository(db_path, "gate")
+    market_repo_gate_futures = MarketRepository(db_path, "gate_futures")
     market_repo_mexc = MarketRepository(db_path, "mexc")
+    market_repo_mexc_futures = MarketRepository(db_path, "mexc_futures")
     funding_repo_binance_futures = FundingRateRepository(db_path, "binance_futures")
     funding_repo_kucoin_futures = FundingRateRepository(db_path, "kucoin_futures")
+    funding_repo_gate_futures = FundingRateRepository(db_path, "gate_futures")
+    funding_repo_mexc_futures = FundingRateRepository(db_path, "mexc_futures")
     currencies_repo = CurrenciesRepository(conn)
     exchanges_repo = ExchangesRepository(db_path)
     trading_pairs_repo = TradingPairsRepository(conn)
@@ -88,7 +98,9 @@ async def main():
     order_book_repo_kucoin = OrderBookRepository(db_path, "kucoin")
     order_book_repo_kucoin_futures = OrderBookRepository(db_path, "kucoin_futures")
     order_book_repo_gate = OrderBookRepository(db_path, "gate")
+    order_book_repo_gate_futures = OrderBookRepository(db_path, "gate_futures")
     order_book_repo_mexc = OrderBookRepository(db_path, "mexc")
+    order_book_repo_mexc_futures = OrderBookRepository(db_path, "mexc_futures")
 
     # Создаем OrderBookCollector и регистрируем источники
     ob_collector = OrderBookCollector()
@@ -97,7 +109,9 @@ async def main():
     ob_collector.add_source(kucoin_api, order_book_repo_kucoin)
     ob_collector.add_source(kucoin_futures_api, order_book_repo_kucoin_futures)
     ob_collector.add_source(gate_api, order_book_repo_gate)
+    ob_collector.add_source(gate_futures_api, order_book_repo_gate_futures)
     ob_collector.add_source(mexc_api, order_book_repo_mexc)
+    ob_collector.add_source(mexc_futures_api, order_book_repo_mexc_futures)
 
     # Словари для передачи в SpreadMonitor
     apis_dict = {
@@ -106,7 +120,9 @@ async def main():
         "KuCoin": kucoin_api,
         "KuCoin Futures": kucoin_futures_api,
         "Gate.io": gate_api,
+        "Gate.io Futures": gate_futures_api,
         "MEXC": mexc_api,
+        "MEXC Futures": mexc_futures_api,
     }
     order_book_repos_dict = {
         "binance": order_book_repo_binance,
@@ -114,7 +130,9 @@ async def main():
         "kucoin": order_book_repo_kucoin,
         "kucoin_futures": order_book_repo_kucoin_futures,
         "gate": order_book_repo_gate,
+        "gate_futures": order_book_repo_gate_futures,
         "mexc": order_book_repo_mexc,
+        "mexc_futures": order_book_repo_mexc_futures,
     }
 
     # Создаем SpreadMonitor
@@ -164,7 +182,9 @@ async def main():
     health_monitor.register_exchange("KuCoin")
     health_monitor.register_exchange("KuCoin Futures")
     health_monitor.register_exchange("Gate.io")
+    health_monitor.register_exchange("Gate.io Futures")
     health_monitor.register_exchange("MEXC")
+    health_monitor.register_exchange("MEXC Futures")
 
     # Создаем коллекторы
     binance_collector = BinanceCollector(binance_api, market_repo_binance, exchanges_repo)
@@ -172,7 +192,9 @@ async def main():
     kucoin_collector = KuCoinCollector(kucoin_api, market_repo_kucoin, exchanges_repo)
     kucoin_futures_collector = KuCoinFuturesCollector(kucoin_futures_api, market_repo_kucoin_futures, exchanges_repo)
     gate_collector = GateCollector(gate_api, market_repo_gate, exchanges_repo)
+    gate_futures_collector = GateFuturesCollector(gate_futures_api, market_repo_gate_futures, exchanges_repo)
     mexc_collector = MexcCollector(mexc_api, market_repo_mexc, exchanges_repo)
+    mexc_futures_collector = MexcFuturesCollector(mexc_futures_api, market_repo_mexc_futures, exchanges_repo)
 
     try:
         # Сначала собираем данные о сетях и торговых парах параллельно
@@ -183,7 +205,9 @@ async def main():
             kucoin_collector.collect_data(),
             kucoin_futures_collector.collect_data(),
             gate_collector.collect_data(),
-            mexc_collector.collect_data()
+            gate_futures_collector.collect_data(),
+            mexc_collector.collect_data(),
+            mexc_futures_collector.collect_data()
         )
 
         # Создаем и заполняем таблицу currencies
@@ -197,7 +221,7 @@ async def main():
 
         # Создаем и заполняем таблицу unique_trading_pairs
         logger.info("Извлекаем уникальные торговые пары")
-        trading_tables = ["binance_trading_pairs", "binance_futures_trading_pairs", "kucoin_trading_pairs", "kucoin_futures_trading_pairs", "gate_trading_pairs", "mexc_trading_pairs"]
+        trading_tables = ["binance_trading_pairs", "binance_futures_trading_pairs", "kucoin_trading_pairs", "kucoin_futures_trading_pairs", "gate_trading_pairs", "gate_futures_trading_pairs", "mexc_trading_pairs", "mexc_futures_trading_pairs"]
         unique_pairs = trading_pairs_repo.extract_unique_trading_pairs(trading_tables)
         logger.info(f"Извлечено уникальных торговых пар: {len(unique_pairs)}")
 
@@ -212,7 +236,9 @@ async def main():
         market_repo_kucoin.update_currency_ids()
         market_repo_kucoin_futures.update_currency_ids()
         market_repo_gate.update_currency_ids()
+        market_repo_gate_futures.update_currency_ids()
         market_repo_mexc.update_currency_ids()
+        market_repo_mexc_futures.update_currency_ids()
         logger.info("ID валют успешно обновлены")
 
         # Обновляем pair_id в таблицах trading_pairs
@@ -222,7 +248,9 @@ async def main():
         market_repo_kucoin.update_pair_ids()
         market_repo_kucoin_futures.update_pair_ids()
         market_repo_gate.update_pair_ids()
+        market_repo_gate_futures.update_pair_ids()
         market_repo_mexc.update_pair_ids()
+        market_repo_mexc_futures.update_pair_ids()
         logger.info("ID торговых пар успешно обновлены")
 
         # Интервал обновления в секундах
@@ -242,12 +270,14 @@ async def main():
                 kucoin_collector.collect_data(),
                 kucoin_futures_collector.collect_data(),
                 gate_collector.collect_data(),
+                gate_futures_collector.collect_data(),
                 mexc_collector.collect_data(),
+                mexc_futures_collector.collect_data(),
                 return_exceptions=True
             )
 
             # Обрабатываем результаты для каждой биржи
-            for exchange_name, result in zip(["Binance", "Binance Futures", "KuCoin", "KuCoin Futures", "Gate.io", "MEXC"], results):
+            for exchange_name, result in zip(["Binance", "Binance Futures", "KuCoin", "KuCoin Futures", "Gate.io", "Gate.io Futures", "MEXC", "MEXC Futures"], results):
                 request_time = (time.time() - cycle_start) * 1000  # в миллисекундах
                 if isinstance(result, Exception):
                     logger.error(f"Ошибка при сборе данных с {exchange_name}: {str(result)}")
@@ -266,6 +296,16 @@ async def main():
             if kf_funding:
                 funding_repo_kucoin_futures.save_funding_rates(kf_funding)
                 logger.debug(f"Saved {len(kf_funding)} funding rates from KuCoin Futures")
+
+            gf_funding = await gate_futures_api.fetch_funding_rates()
+            if gf_funding:
+                funding_repo_gate_futures.save_funding_rates(gf_funding)
+                logger.debug(f"Saved {len(gf_funding)} funding rates from Gate.io Futures")
+
+            mf_funding = await mexc_futures_api.fetch_funding_rates()
+            if mf_funding:
+                funding_repo_mexc_futures.save_funding_rates(mf_funding)
+                logger.debug(f"Saved {len(mf_funding)} funding rates from MEXC Futures")
 
             # Мониторинг спредов (сканирование найденных расхождений)
             logger.debug("Сканирование арбитражных возможностей...")
@@ -316,15 +356,21 @@ async def main():
         await kucoin_api.close_session()
         await kucoin_futures_api.close_session()
         await gate_api.close_session()
+        await gate_futures_api.close_session()
         await mexc_api.close_session()
+        await mexc_futures_api.close_session()
         funding_repo_binance_futures.close()
         funding_repo_kucoin_futures.close()
+        funding_repo_gate_futures.close()
+        funding_repo_mexc_futures.close()
         order_book_repo_binance.close()
         order_book_repo_binance_futures.close()
         order_book_repo_kucoin.close()
         order_book_repo_kucoin_futures.close()
         order_book_repo_gate.close()
+        order_book_repo_gate_futures.close()
         order_book_repo_mexc.close()
+        order_book_repo_mexc_futures.close()
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")
 
