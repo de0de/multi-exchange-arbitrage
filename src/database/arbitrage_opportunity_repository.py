@@ -121,5 +121,5 @@ class ArbitrageOpportunityRepository:
     def save_opportunities(self, opportunities: List[ArbitrageOpportunity]) -> List[int]:
         """Сохраняет список арбитражных возможностей. Возвращает список id."""
         ids = [self.save_opportunity(opp) for opp in opportunities]
-        self.logger.info(f"Saved {len(opportunities)} arbitrage opportunities to database")
+        self.logger.debug(f"Saved {len(opportunities)} arbitrage opportunities to database")
         return ids

@@ -94,7 +94,7 @@ class FundingRateRepository:
                     rate.next_funding_time, ts, rt
                 ))
         self.conn.commit()
-        self.logger.info(f"Saved {len(rates)} funding rates in the database")
+        self.logger.debug(f"Saved {len(rates)} funding rates in the database")
 
     def close(self):
         self.conn.close()

@@ -95,7 +95,7 @@ class KuCoinFuturesAPI(BaseExchangeAPI):
                     self.logger.warning(f"Пропущена пара {symbol}: {e}")
                     continue
 
-            self.logger.info(f"Successfully fetched {len(pairs)} trading pairs from KuCoin Futures")
+            self.logger.debug(f"Successfully fetched {len(pairs)} trading pairs from KuCoin Futures")
             return pairs
 
         except Exception as e:
@@ -173,7 +173,7 @@ class KuCoinFuturesAPI(BaseExchangeAPI):
                 readable_time=readable_time
             ))
 
-        self.logger.info(f"Fetched {len(rates)} funding rates from KuCoin Futures cache")
+        self.logger.debug(f"Fetched {len(rates)} funding rates from KuCoin Futures cache")
         return rates
 
     async def fetch_order_book(self, symbol: str, limit: int = 20) -> OrderBookData:

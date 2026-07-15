@@ -53,7 +53,7 @@ class GateSpotAPI(BaseExchangeAPI):
                 except (KeyError, ValueError) as e:
                     self.logger.warning(f"Пропущена пара {symbol}: {e}")
                     continue
-            self.logger.info(f"Successfully fetched {len(pairs)} trading pairs")
+            self.logger.debug(f"Successfully fetched {len(pairs)} trading pairs")
             return pairs
         except Exception as e:
             self.logger.error(f"Error fetching trading pairs: {e}")

@@ -18,4 +18,4 @@ class GateCollector(BaseDataCollector):
         pairs = await self.spot_api.fetch_trading_pairs()
         if pairs:
             self.market_repo.save_trading_pairs(pairs)
-            self.logger.info(f"Collected {len(pairs)} trading pairs from Gate.io")
+            self.logger.debug(f"Collected {len(pairs)} trading pairs from Gate.io")

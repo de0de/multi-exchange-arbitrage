@@ -108,7 +108,7 @@ class MarketRepository(BaseRepository):
                     pair.timestamp, pair.readable_time
                 ))
         self.conn.commit()
-        self.logger.info(f"Updated {len(pairs)} trading pairs in the database")
+        self.logger.debug(f"Updated {len(pairs)} trading pairs in the database")
 
     def close(self):
         self.conn.close()

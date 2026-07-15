@@ -113,6 +113,13 @@ class SpreadMonitor:
         self.history_repo = SpreadHistoryRepository(conn)
         self._last_history_snapshot = 0.0
 
+        # Троттлинг логов: коллизии повторяются каждый цикл для одних и тех же
+        # пар (37/цикл = сотни тысяч строк/сутки) — предупреждаем раз в час
+        # на пару; топ возможностей — не чаще раза в минуту
+        self._collision_warned: Dict[str, float] = {}
+        self._collision_warn_interval = 3600.0
+        self._last_top_log = 0.0
+
     def _load_exchange_fees(self):
         """Загружает taker_fee из таблицы exchanges в кеш на время жизни объекта."""
         try:
@@ -254,12 +261,12 @@ class SpreadMonitor:
 
         Возвращает отсортированный список ArbitrageOpportunity.
         """
-        self.logger.info("Starting spread scan...")
+        self.logger.debug("Starting spread scan...")
         start_ts = time.time()
 
         # 1. Строим карту пар
         pairs_map = self._build_pairs_map()
-        self.logger.info(f"Found {len(pairs_map)} unique standardized pairs across all exchanges")
+        self.logger.debug(f"Found {len(pairs_map)} unique standardized pairs across all exchanges")
 
         # 2. Собираем предварительные кандидаты (без Order Book)
         candidates: List[ArbitrageOpportunity] = []
@@ -376,9 +383,13 @@ class SpreadMonitor:
                     if max_buy_volume_usdt < self.min_volume_usdt or max_sell_volume_usdt < self.min_volume_usdt:
                         continue
 
-                    # Проверка на коллизию тикеров (аномально большой спред)
+                    # Проверка на коллизию тикеров (аномально большой спред).
+                    # Предупреждение — не чаще раза в час на пару: коллизия
+                    # видна каждый цикл, без троттлинга это сотни тысяч
+                    # одинаковых строк в сутки
                     suspected_collision = raw_spread_percent >= self.suspected_collision_threshold_percent
-                    if suspected_collision:
+                    if suspected_collision and (now - self._collision_warned.get(std_pair, 0.0)) >= self._collision_warn_interval:
+                        self._collision_warned[std_pair] = now
                         self.logger.warning(
                             f"SUSPECTED_TICKER_COLLISION: {std_pair} "
                             f"spread={raw_spread_percent:.2f}% "
@@ -424,7 +435,7 @@ class SpreadMonitor:
         non_collision.sort(key=lambda opp: opp.net_spread_percent, reverse=True)
         top_candidates = non_collision[:top_n_candidates]
 
-        self.logger.info(
+        self.logger.debug(
             f"Found {len(candidates)} candidates "
             f"({len(candidates) - len(non_collision)} suspected collisions), "
             f"checking Order Book for top {len(top_candidates)}"
@@ -570,8 +581,23 @@ class SpreadMonitor:
         """Сохраняет результаты в БД через репозиторий. Возвращает список id."""
         return self.opportunity_repo.save_opportunities(opportunities)
 
-    def log_top_opportunities(self, opportunities: List[ArbitrageOpportunity], top_n: int = 10):
-        """Логирует топ-N арбитражных возможностей."""
+    def log_top_opportunities(
+        self,
+        opportunities: List[ArbitrageOpportunity],
+        top_n: int = 10,
+        min_interval: float = 60.0,
+    ):
+        """
+        Логирует топ-N арбитражных возможностей, не чаще min_interval секунд.
+
+        Без троттлинга блок на ~30 строк печатался каждый цикл (~5 сек) —
+        сотни тысяч строк в сутки; состав топа между циклами почти не меняется.
+        """
+        now = time.time()
+        if now - self._last_top_log < min_interval:
+            return
+        self._last_top_log = now
+
         if not opportunities:
             self.logger.info("No arbitrage opportunities found")
             return
