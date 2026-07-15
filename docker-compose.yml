@@ -1,0 +1,22 @@
+# PostgreSQL + TimescaleDB для проекта (локально и на VPS — одно окружение).
+# Запуск:  docker compose up -d
+# Данные живут в именованном volume arbitrage_pgdata (переживают перезапуски).
+# Пароль задаётся в .env (POSTGRES_PASSWORD=...), дефолт только для локальной
+# разработки — на VPS обязательно переопределить.
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: arbitrage-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: arbitrage
+      POSTGRES_USER: arbitrage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arbitrage_dev}
+    ports:
+      # Только localhost — БД не должна торчать наружу ни локально, ни на VPS
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - arbitrage_pgdata:/var/lib/postgresql/data
+
+volumes:
+  arbitrage_pgdata:
