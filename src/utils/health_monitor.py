@@ -17,7 +17,11 @@ class ExchangeHealthMonitor:
         self.error_thresholds = {
             'consecutive_errors': 3,  # Порог последовательных ошибок
             'error_rate': 0.3,        # Допустимый процент ошибок (30%)
-            'max_latency': 2000       # Максимальная задержка в мс
+            # Порог задержки: фьючерсные эндпоинты (полный список контрактов
+            # + тикеры) штатно отвечают 2-3 сек — порог 2000 мс давал
+            # непрерывный флаппинг degraded/healthy. 5000 мс ловит реальные
+            # деградации, не штатную работу
+            'max_latency': 5000       # Максимальная задержка в мс
         }
         self._running = False
         self._monitor_task = None
@@ -76,20 +80,32 @@ class ExchangeHealthMonitor:
     def _update_status(self, exchange_name: str):
         """Обновляет статус биржи на основе собранных метрик."""
         stats = self.exchange_stats[exchange_name]
-        
+        prev_status = stats.get('status', 'healthy')
+
         # Определяем статус на основе наших порогов
         if stats['consecutive_errors'] >= self.error_thresholds['consecutive_errors']:
-            stats['status'] = 'down'
-            logger.warning(f"Биржа {exchange_name} недоступна. {stats['consecutive_errors']} последовательных ошибок")
+            new_status = 'down'
+            reason = f"Биржа {exchange_name} недоступна. {stats['consecutive_errors']} последовательных ошибок"
         elif stats['request_count'] > 0 and stats['error_count'] / stats['request_count'] > self.error_thresholds['error_rate']:
-            stats['status'] = 'degraded'
+            new_status = 'degraded'
             error_rate = stats['error_count'] / stats['request_count'] * 100
-            logger.warning(f"Производительность биржи {exchange_name} снижена. Частота ошибок: {error_rate:.1f}%")
+            reason = f"Производительность биржи {exchange_name} снижена. Частота ошибок: {error_rate:.1f}%"
         elif stats['avg_latency'] > self.error_thresholds['max_latency']:
-            stats['status'] = 'degraded'
-            logger.warning(f"Высокая задержка для {exchange_name}: {stats['avg_latency']:.1f} мс")
+            new_status = 'degraded'
+            reason = f"Высокая задержка для {exchange_name}: {stats['avg_latency']:.1f} мс"
         else:
-            stats['status'] = 'healthy'
+            new_status = 'healthy'
+            reason = None
+
+        stats['status'] = new_status
+
+        # Логируем только СМЕНУ статуса: деградация длится часами, и warning
+        # на каждый запрос давал тысячи одинаковых строк за прогон
+        if new_status != prev_status:
+            if new_status == 'healthy':
+                logger.info(f"Биржа {exchange_name} восстановилась (была: {prev_status})")
+            else:
+                logger.warning(reason)
             
     def get_exchange_status(self, exchange_name: str) -> Dict[str, Any]:
         """Возвращает текущее состояние биржи."""

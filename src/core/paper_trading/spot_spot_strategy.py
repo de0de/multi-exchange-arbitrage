@@ -64,6 +64,10 @@ class SpotSpotStrategy(BasePaperTradingStrategy):
         min_profit_threshold_percent: float = 0.1,
         curve_volumes: Tuple[float, ...] = (100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0),
         max_close_staleness_seconds: float = 15.0,
+        max_entry_spread_percent: float = 5.0,
+        reopen_cooldown_seconds: float = 300.0,
+        loss_cooldown_seconds: float = 21600.0,
+        loss_threshold_percent: float = -5.0,
     ):
         """
         Args:
@@ -87,6 +91,18 @@ class SpotSpotStrategy(BasePaperTradingStrategy):
         self.min_profit_threshold_percent = min_profit_threshold_percent
         self.curve_volumes = curve_volumes
         self.max_close_staleness_seconds = max_close_staleness_seconds
+
+        # Охрана качества данных симуляции (по итогам первого длинного
+        # прогона 2026-07-16):
+        # - max_entry_spread: spot-spot спред > 5% после комиссий — почти
+        #   наверняка коллизия/миграция токена, "прибыль" по нему фиктивна
+        # - кулдауны: токсичные связки (перманентный разрыв цен бирж)
+        #   без кулдауна переоткрываются сразу после каждого убыточного
+        #   закрытия (наблюдалось: 45 переоткрытий одной связки, avg -37%)
+        self.max_entry_spread_percent = max_entry_spread_percent
+        self.reopen_cooldown_seconds = reopen_cooldown_seconds
+        self.loss_cooldown_seconds = loss_cooldown_seconds
+        self.loss_threshold_percent = loss_threshold_percent
 
     # ------------------------------------------------------------------
     # Открытие позиций
@@ -114,11 +130,32 @@ class SpotSpotStrategy(BasePaperTradingStrategy):
         if opp.suspected_collision or not opp.slippage_available:
             return False
 
+        # Спред выше потолка — почти наверняка коллизия ниже порога детектора
+        # (разные токены/миграция), симуляция дала бы фиктивную прибыль
+        if opp.net_spread_percent > self.max_entry_spread_percent:
+            return False
+
         # Дедупликация: одна открытая позиция на связку (пара + направление)
         if self.trade_repo.has_open_trade(
             opp.standardized_pair, opp.exchange_buy, opp.exchange_sell
         ):
             return False
+
+        # Кулдаун переоткрытия: базовый после любого закрытия связки,
+        # длинный — после закрытия с большим убытком (токсичная связка)
+        last_close = self.trade_repo.get_last_close_for_route(
+            opp.standardized_pair, opp.exchange_buy, opp.exchange_sell
+        )
+        if last_close is not None:
+            closed_at, realized_pct = last_close
+            now = time.time()
+            if closed_at is not None:
+                if now - closed_at < self.reopen_cooldown_seconds:
+                    return False
+                if (realized_pct is not None
+                        and realized_pct < self.loss_threshold_percent
+                        and now - closed_at < self.loss_cooldown_seconds):
+                    return False
 
         transfer = get_transfer_info(opp.base_currency)
 

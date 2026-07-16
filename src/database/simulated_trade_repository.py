@@ -111,6 +111,30 @@ class SimulatedTradeRepository:
         """, (STATUS_OPEN, standardized_pair, exchange_buy, exchange_sell))
         return self.cursor.fetchone() is not None
 
+    def get_last_close_for_route(
+        self, standardized_pair: str, exchange_buy: str, exchange_sell: str
+    ) -> Optional[tuple]:
+        """
+        Последнее закрытие по связке: (closed_at, realized_profit_percent).
+
+        Нужно для кулдауна переоткрытия: токсичные связки (перманентный
+        разрыв цен между биржами — миграции токенов, замороженные рынки,
+        коллизии ниже порога) без кулдауна переоткрываются сразу после
+        каждого убыточного закрытия и накручивают фиктивные убытки.
+        """
+        self.cursor.execute("""
+            SELECT st.closed_at, st.realized_profit_percent
+            FROM simulated_trades st
+            JOIN arbitrage_opportunities ao ON ao.id = st.opportunity_id
+            WHERE st.status = %s
+              AND ao.standardized_pair = %s
+              AND ao.exchange_buy = %s
+              AND ao.exchange_sell = %s
+            ORDER BY st.closed_at DESC
+            LIMIT 1
+        """, (STATUS_CLOSED, standardized_pair, exchange_buy, exchange_sell))
+        return self.cursor.fetchone()
+
     def get_open_trades_ready_to_close(self, now: float) -> List[dict]:
         """
         Открытые сделки, у которых hypothetical_close_at уже наступил.
