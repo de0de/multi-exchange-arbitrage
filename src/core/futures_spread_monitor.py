@@ -49,6 +49,7 @@ class FuturesSpreadMonitor:
         min_basis_percent: float = 0.5,
         snapshot_interval: float = 300.0,
         max_staleness_seconds: float = 15.0,
+        max_leg_skew_seconds: float = 5.0,
         allowed_quote_currencies: Optional[List[str]] = None,
         suspected_collision_threshold_percent: float = 20.0,
         funding_material_delta: float = 1e-4,
@@ -62,6 +63,10 @@ class FuturesSpreadMonitor:
         self.min_basis_percent = min_basis_percent
         self.snapshot_interval = snapshot_interval
         self.max_staleness_seconds = max_staleness_seconds
+        # См. SpreadMonitor.max_leg_skew_seconds: обе ноги могут пройти
+        # max_staleness_seconds по отдельности, но разойтись друг с другом
+        # на много секунд — параметр, калибруется по факту прогона
+        self.max_leg_skew_seconds = max_leg_skew_seconds
         self.allowed_quote_currencies = allowed_quote_currencies or ["USDT", "USDC", "BTC", "ETH"]
         self.collision_threshold = suspected_collision_threshold_percent
 
@@ -100,6 +105,14 @@ class FuturesSpreadMonitor:
         self._last_funding: Dict[Tuple[str, str], Tuple[float, float]] = \
             self.funding_history_repo.load_last_rates()
 
+        # Purge контрактов, не встречавшихся в funding дольше порога
+        # (делистинги) — anti memory growth на многомесячном прогоне.
+        # Порог шире часового окна дрейфа: контракт не должен исчезать
+        # из словаря, пока реально торгуется.
+        self._last_funding_purge = 0.0
+        self._funding_purge_interval = 3600.0
+        self._funding_stale_after = 7 * 86400.0
+
     # ------------------------------------------------------------------
     # Чтение источников
     # ------------------------------------------------------------------
@@ -129,7 +142,7 @@ class FuturesSpreadMonitor:
                 continue
             if quote not in self.allowed_quote_currencies:
                 continue
-            legs[pair] = {"bid": bid, "ask": ask, "quote": quote}
+            legs[pair] = {"bid": bid, "ask": ask, "quote": quote, "ts": ts}
         return legs
 
     def _read_funding(self) -> Dict[Tuple[str, str], dict]:
@@ -190,6 +203,12 @@ class FuturesSpreadMonitor:
             for std_pair in legs_a.keys() & legs_b.keys():
                 a = legs_a[std_pair]
                 b = legs_b[std_pair]
+
+                # Рассинхрон ног (см. SpreadMonitor) — не сравниваем свежую
+                # ногу со "вчерашней", даже если обе прошли staleness порознь
+                if abs(a["ts"] - b["ts"]) > self.max_leg_skew_seconds:
+                    continue
+
                 mid_a = (a["bid"] + a["ask"]) / 2.0
                 mid_b = (b["bid"] + b["ask"]) / 2.0
                 if mid_a <= 0:
@@ -266,3 +285,15 @@ class FuturesSpreadMonitor:
         except psycopg.Error as e:
             self.conn.rollback()
             self.logger.error(f"funding_rate_history: ошибка записи: {e}")
+
+        self._purge_funding_cache(now)
+
+    def _purge_funding_cache(self, now: float):
+        """Чистит _last_funding от контрактов, не встречавшихся неделю (делистинг)."""
+        if now - self._last_funding_purge < self._funding_purge_interval:
+            return
+        self._last_funding_purge = now
+        cutoff = now - self._funding_stale_after
+        stale = [key for key, (_, ts) in self._last_funding.items() if ts < cutoff]
+        for key in stale:
+            del self._last_funding[key]

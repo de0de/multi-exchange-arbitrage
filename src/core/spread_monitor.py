@@ -74,6 +74,7 @@ class SpreadMonitor:
         min_spread_percent: float = 0.5,
         min_volume_usdt: float = 1000.0,
         max_staleness_seconds: float = 15.0,
+        max_leg_skew_seconds: float = 5.0,
         allowed_quote_currencies: Optional[List[str]] = None,
         ob_ttl_seconds: float = 5.0,
         suspected_collision_threshold_percent: float = 20.0,
@@ -97,6 +98,13 @@ class SpreadMonitor:
         self.min_spread_percent = min_spread_percent
         self.min_volume_usdt = min_volume_usdt
         self.max_staleness_seconds = max_staleness_seconds
+        # Каждая нога может пройти max_staleness_seconds по отдельности, но
+        # всё равно сравниваться с другой ногой, устаревшей на много секунд
+        # больше — "живая" цена против "вчерашней". Параметр, не хардкод:
+        # цикл сбора ~15-20с на PostgreSQL, gather() даёт естественный
+        # разброс; калибровать по факту прогона на VPS, не гадать заранее
+        # (см. разбор внешнего проекта, порог 1.0с там мог быть слишком строг).
+        self.max_leg_skew_seconds = max_leg_skew_seconds
         self.allowed_quote_currencies = allowed_quote_currencies or ["USDT", "USDC", "BTC", "ETH"]
         self.suspected_collision_threshold_percent = suspected_collision_threshold_percent
         self.max_opportunities = max_opportunities
@@ -122,6 +130,11 @@ class SpreadMonitor:
         self._collision_warned: Dict[str, float] = {}
         self._collision_warn_interval = 3600.0
         self._last_top_log = 0.0
+
+        # Purge словаря коллизий (anti memory growth на недельном прогоне):
+        # пары, делистнутые/переставшие коллизировать, иначе висят вечно
+        self._last_collision_purge = 0.0
+        self._collision_purge_interval = 3600.0
 
     def _load_exchange_fees(self):
         """Загружает taker_fee из таблицы exchanges в кеш на время жизни объекта."""
@@ -297,7 +310,7 @@ class SpreadMonitor:
                 continue
 
             # Собираем цены bid/ask по каждой бирже
-            exchange_prices: List[Tuple[str, float, float, float, float, float, float]] = []
+            exchange_prices: List[Tuple[str, float, float, float, float, float, float, float]] = []
             for exch_key, row in exchange_data.items():
                 bid = row.get("bid")
                 ask = row.get("ask")
@@ -307,7 +320,7 @@ class SpreadMonitor:
                 if bid is None or ask is None or price is None:
                     continue
 
-                # Проверка свежести данных
+                # Проверка свежести данных (независимо для каждой ноги)
                 ts = row.get("timestamp")
                 if ts is not None:
                     age = now - ts
@@ -317,7 +330,7 @@ class SpreadMonitor:
                 bid_vol = row.get("bid_volume", 0) or 0
                 ask_vol = row.get("ask_volume", 0) or 0
 
-                exchange_prices.append((exch_key, bid, ask, price, volume, bid_vol, ask_vol))
+                exchange_prices.append((exch_key, bid, ask, price, volume, bid_vol, ask_vol, ts))
 
             if len(exchange_prices) < 2:
                 continue
@@ -348,8 +361,8 @@ class SpreadMonitor:
                     if i == j:
                         continue
 
-                    buy_exch_key, buy_bid, buy_ask, buy_price, buy_vol, buy_bid_vol, buy_ask_vol = exchange_prices[i]
-                    sell_exch_key, sell_bid, sell_ask, sell_price, sell_vol, sell_bid_vol, sell_ask_vol = exchange_prices[j]
+                    buy_exch_key, buy_bid, buy_ask, buy_price, buy_vol, buy_bid_vol, buy_ask_vol, buy_ts = exchange_prices[i]
+                    sell_exch_key, sell_bid, sell_ask, sell_price, sell_vol, sell_bid_vol, sell_ask_vol, sell_ts = exchange_prices[j]
 
                     # Покупаем по ask (самая низкая цена продавца), продаём по bid (самая высокая цена покупателя)
                     buy_price_effective = buy_ask
@@ -357,6 +370,15 @@ class SpreadMonitor:
 
                     if buy_price_effective <= 0 or sell_price_effective <= 0:
                         continue
+
+                    # Рассинхрон ног: обе стороны могут пройти max_staleness_seconds
+                    # по отдельности, но одна свежая (1с), другая почти протухшая
+                    # (14с) — это сравнение живой цены со "вчерашней". Не путать
+                    # с max_staleness_seconds (проверяет каждую ногу от "сейчас"),
+                    # это — ноги ДРУГ ОТНОСИТЕЛЬНО ДРУГА.
+                    if buy_ts is not None and sell_ts is not None:
+                        if abs(buy_ts - sell_ts) > self.max_leg_skew_seconds:
+                            continue
 
                     # Вычисляем спред
                     raw_spread_percent = (sell_price_effective - buy_price_effective) / buy_price_effective * 100.0
@@ -425,6 +447,7 @@ class SpreadMonitor:
 
         # История спредов сохраняется независимо от наличия кандидатов
         self._save_history(history_rows, snapshot_due, now)
+        self._purge_collision_cache(now)
 
         if not candidates:
             self.logger.info("No candidates found after filtering")
@@ -556,6 +579,21 @@ class SpreadMonitor:
         buy_ob = await self._fetch_order_book_with_cache(buy_key, buy_symbol)
         sell_ob = await self._fetch_order_book_with_cache(sell_key, sell_symbol)
         return buy_ob, sell_ob
+
+    def _purge_collision_cache(self, now: float):
+        """
+        Чистит _collision_warned от пар, не коллизировавших дольше интервала
+        предупреждения — иначе словарь растёт неограниченно на недельном
+        прогоне (делистинги/переставшие коллидировать пары никогда не
+        удаляются сами).
+        """
+        if now - self._last_collision_purge < self._collision_purge_interval:
+            return
+        self._last_collision_purge = now
+        cutoff = now - self._collision_warn_interval
+        stale = [pair for pair, ts in self._collision_warned.items() if ts < cutoff]
+        for pair in stale:
+            del self._collision_warned[pair]
 
     def _find_exchange_key_by_display(self, display_name: str) -> Optional[str]:
         """Ищет exchange_key по display_name."""
