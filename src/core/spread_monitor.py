@@ -24,6 +24,7 @@ from src.database.arbitrage_opportunity_repository import ArbitrageOpportunityRe
 from src.database.order_book_repository import OrderBookRepository
 from src.database.spread_history_repository import SpreadHistoryRepository
 from src.data.collectors.cex.order_book_collector import OrderBookCollector
+from config.collision_blocklist import COLLISION_BLOCKLIST
 
 
 class SpreadMonitor:
@@ -331,6 +332,17 @@ class SpreadMonitor:
                 ask_vol = row.get("ask_volume", 0) or 0
 
                 exchange_prices.append((exch_key, bid, ask, price, volume, bid_vol, ask_vol, ts))
+
+            # Подтверждённые коллизии тикеров (см. config/collision_blocklist.py):
+            # исключаем ногу конкретной биржи целиком, а не полагаемся на
+            # порог по спреду — иначе один и тот же известный "разный актив"
+            # заново пишется в spread_history/arbitrage_opportunities каждый цикл
+            blocked_exchange = COLLISION_BLOCKLIST.get(std_pair)
+            if blocked_exchange is not None:
+                exchange_prices = [
+                    p for p in exchange_prices
+                    if self._get_exchange_display(p[0]) != blocked_exchange
+                ]
 
             if len(exchange_prices) < 2:
                 continue
