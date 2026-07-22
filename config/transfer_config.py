@@ -107,6 +107,65 @@ TRANSFER_TABLE: Dict[str, TransferInfo] = {
     "LAB": TransferInfo("LAB", "BEP20", 0.9, 120.0),
     "ELIZAOS": TransferInfo("ELIZAOS", "SOL", 900.0, 90.0),
     "BTT": TransferInfo("BTT", "TRC20", 3200000.0, 180.0),
+
+    # --- Data-driven пополнение (2026-07-23): топ-60 монет по частоте
+    # fee_unknown в simulated_trades за 14 суток (suspected_collision
+    # исключены, заблокированные тикеры из collision_blocklist.py тоже —
+    # их fee_unknown был артефактом ложных сравнений, не реальной торговлей).
+    # Источник — тот же публичный KuCoin API, минимальная комиссия среди
+    # сетей с isWithdrawEnabled=true. 4 монеты (BANK, NIGHT, ACE, NFP)
+    # листингованы на KuCoin, но withdrawal отключён на всех сетях прямо
+    # сейчас — реальной комиссии нет, остаются fee_unknown осознанно, не
+    # добавлены. 8 монет (RSC, AO, TX, QBX, WKC, TBC, ARG, BTS) на KuCoin
+    # не найдены вовсе — тоже остаются fee_unknown.
+    "BLUAI": TransferInfo("BLUAI", "BEP20", 70.0, 120.0),
+    "TLM": TransferInfo("TLM", "BEP20", 250.0, 120.0),
+    "NKN": TransferInfo("NKN", "ERC20", 111.744, 300.0),
+    "PYR": TransferInfo("PYR", "ERC20", 3.5, 300.0),
+    "DEXE": TransferInfo("DEXE", "BEP20", 0.1, 120.0),
+    "TRUF": TransferInfo("TRUF", "ERC20", 90.0, 300.0),
+    "AKE": TransferInfo("AKE", "BEP20", 2000.0, 120.0),
+    "TRADE": TransferInfo("TRADE", "Polygon POS", 16.0, 300.0),
+    "OXT": TransferInfo("OXT", "ERC20", 94.0, 300.0),
+    "LRC": TransferInfo("LRC", "ERC20", 50.0, 300.0),
+    "TEA": TransferInfo("TEA", "ERC20", 8000.0, 300.0),
+    "ERA": TransferInfo("ERA", "ERC20", 9.0, 300.0),
+    "REEF": TransferInfo("REEF", "Reef", 5000.0, 900.0),
+    "DGB": TransferInfo("DGB", "DGB", 100.0, 900.0),
+    "ES": TransferInfo("ES", "ERC20", 180.0, 300.0),
+    "ARTY": TransferInfo("ARTY", "BEP20", 24.0, 120.0),
+    "QORPO": TransferInfo("QORPO", "ERC20", 500.0, 300.0),
+    "CESS": TransferInfo("CESS", "BEP20", 180.0, 120.0),
+    "HEART": TransferInfo("HEART", "ERC20", 1000.0, 300.0),
+    "HIGH": TransferInfo("HIGH", "ERC20", 24.0, 300.0),
+    "VERONA": TransferInfo("VERONA", "Verona", 3.0, 900.0),
+    "PAAL": TransferInfo("PAAL", "ERC20", 53.0, 300.0),
+    "VAI": TransferInfo("VAI", "ERC20", 176.0, 300.0),
+    "BAL": TransferInfo("BAL", "ERC20", 3.5, 300.0),
+    "MAT": TransferInfo("MAT", "MAT", 12.0, 900.0),
+    "VENOM": TransferInfo("VENOM", "Venom", 30.0, 900.0),
+    "ROAM": TransferInfo("ROAM", "SOL", 60.0, 90.0),
+    "NPC": TransferInfo("NPC", "ERC20", 330.0, 300.0),
+    "OBT": TransferInfo("OBT", "ARBITRUM", 1500.0, 300.0),
+    "VR": TransferInfo("VR", "ERC20", 750.0, 300.0),
+    "GWEI": TransferInfo("GWEI", "ERC20", 19.0, 300.0),
+    "PYBOBO": TransferInfo("PYBOBO", "SOL", 500.0, 90.0),
+    "CAMP": TransferInfo("CAMP", "ERC20", 500.0, 300.0),
+    "DN": TransferInfo("DN", "BEP20", 6.0, 120.0),
+    "MYRO": TransferInfo("MYRO", "SOL", 300.0, 90.0),
+    "DODO": TransferInfo("DODO", "KCC", 15.0, 120.0),
+    "XEC": TransferInfo("XEC", "XEC", 120000.0, 900.0),
+    "LYX": TransferInfo("LYX", "LUKSO", 2.0, 900.0),
+    "ONE": TransferInfo("ONE", "ONE", 400.0, 900.0),
+    "XDB": TransferInfo("XDB", "XDB CHAIN", 4000.0, 900.0),
+    "BOSON": TransferInfo("BOSON", "ERC20", 35.0, 300.0),
+    "CHIRP": TransferInfo("CHIRP", "SUI", 60.0, 120.0),
+    "SLC": TransferInfo("SLC", "Peaq", 14000.0, 900.0),
+    "HOME": TransferInfo("HOME", "Base", 60.0, 300.0),
+    "WMTX": TransferInfo("WMTX", "ERC20", 20.0, 300.0),
+    "ERG": TransferInfo("ERG", "ERGO", 2.0, 900.0),
+    "SNEK": TransferInfo("SNEK", "ADA", 4000.0, 600.0),
+    "CSPR": TransferInfo("CSPR", "Casper", 350.0, 900.0),
 }
 
 
