@@ -35,6 +35,10 @@ from src.core.paper_trading.spot_spot_strategy import SpotSpotStrategy
 from src.utils.logger import setup_logging
 from src.utils.health_monitor import health_monitor
 from src.database import db
+from config.settings import (
+    MIN_SPREAD_PERCENT, MIN_VOLUME_USDT, MAX_STALENESS_SECONDS,
+    OB_TTL_SECONDS, TRADE_SIZE_USDT,
+)
 
 # Обработчики сигналов для корректного завершения
 shutdown_event = asyncio.Event()
@@ -142,11 +146,11 @@ async def main():
         apis=apis_dict,
         order_book_repos=order_book_repos_dict,
         order_book_collector=ob_collector,
-        min_spread_percent=0.5,
-        min_volume_usdt=1000.0,
-        max_staleness_seconds=15.0,
+        min_spread_percent=MIN_SPREAD_PERCENT,
+        min_volume_usdt=MIN_VOLUME_USDT,
+        max_staleness_seconds=MAX_STALENESS_SECONDS,
         allowed_quote_currencies=["USDT", "USDC", "BTC", "ETH"],
-        ob_ttl_seconds=5.0,
+        ob_ttl_seconds=OB_TTL_SECONDS,
         suspected_collision_threshold_percent=20.0,
         max_opportunities=100,
     )
@@ -172,7 +176,7 @@ async def main():
         conn=conn,
         spread_monitor=spread_monitor,
         trade_repo=simulated_trade_repo,
-        trade_size_usdt=1000.0,  # рабочий депозит
+        trade_size_usdt=TRADE_SIZE_USDT,
         min_profit_threshold_percent=0.1,
     )
 
@@ -286,27 +290,32 @@ async def main():
                 else:
                     health_monitor.record_request(exchange_name, True, request_time)
 
-            # Сбор funding rate (только futures биржи)
+            # Сбор funding rate (только futures биржи). Параллельно, тот же
+            # паттерн, что и для основного сбора данных выше — раньше это были
+            # 4 последовательных await (из них реальный HTTP-запрос делает
+            # только Binance Futures; KuCoin/Gate.io/MEXC Futures читают
+            # funding rate из in-memory кеша, заполненного fetch_trading_pairs
+            # в этом же цикле, — экономия в основном за счёт Binance).
             logger.debug("Сбор funding rate с Futures бирж")
-            bf_funding = await binance_futures_api.fetch_funding_rates()
-            if bf_funding:
-                funding_repo_binance_futures.save_funding_rates(bf_funding)
-                logger.debug(f"Saved {len(bf_funding)} funding rates from Binance Futures")
-
-            kf_funding = await kucoin_futures_api.fetch_funding_rates()
-            if kf_funding:
-                funding_repo_kucoin_futures.save_funding_rates(kf_funding)
-                logger.debug(f"Saved {len(kf_funding)} funding rates from KuCoin Futures")
-
-            gf_funding = await gate_futures_api.fetch_funding_rates()
-            if gf_funding:
-                funding_repo_gate_futures.save_funding_rates(gf_funding)
-                logger.debug(f"Saved {len(gf_funding)} funding rates from Gate.io Futures")
-
-            mf_funding = await mexc_futures_api.fetch_funding_rates()
-            if mf_funding:
-                funding_repo_mexc_futures.save_funding_rates(mf_funding)
-                logger.debug(f"Saved {len(mf_funding)} funding rates from MEXC Futures")
+            funding_results = await asyncio.gather(
+                binance_futures_api.fetch_funding_rates(),
+                kucoin_futures_api.fetch_funding_rates(),
+                gate_futures_api.fetch_funding_rates(),
+                mexc_futures_api.fetch_funding_rates(),
+                return_exceptions=True,
+            )
+            funding_repos = [
+                ("Binance Futures", funding_repo_binance_futures),
+                ("KuCoin Futures", funding_repo_kucoin_futures),
+                ("Gate.io Futures", funding_repo_gate_futures),
+                ("MEXC Futures", funding_repo_mexc_futures),
+            ]
+            for (exchange_name, repo), result in zip(funding_repos, funding_results):
+                if isinstance(result, Exception):
+                    logger.error(f"Ошибка при сборе funding rate с {exchange_name}: {result}")
+                elif result:
+                    repo.save_funding_rates(result)
+                    logger.debug(f"Saved {len(result)} funding rates from {exchange_name}")
 
             # Запись спот-фьюч / фьюч-фьюч basis-истории.
             # ВАЖНО: сразу после сохранения funding (снимок текущего цикла) и

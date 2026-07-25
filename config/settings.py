@@ -14,3 +14,12 @@ PG_PASSWORD = os.getenv('PG_PASSWORD', 'arbitrage_dev')
 
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+
+# Параметры стратегии — переопределяются через .env, дефолты совпадают с
+# ранее захардкоженными в main.py значениями (поведение не меняется, если
+# .env их не переопределяет)
+MIN_SPREAD_PERCENT = float(os.getenv('MIN_SPREAD_PERCENT', '0.5'))
+MIN_VOLUME_USDT = float(os.getenv('MIN_VOLUME_USDT', '1000.0'))
+MAX_STALENESS_SECONDS = float(os.getenv('MAX_STALENESS_SECONDS', '15.0'))
+OB_TTL_SECONDS = float(os.getenv('OB_TTL_SECONDS', '5.0'))
+TRADE_SIZE_USDT = float(os.getenv('TRADE_SIZE_USDT', '1000.0'))  # рабочий депозит paper trading
