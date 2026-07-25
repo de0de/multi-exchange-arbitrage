@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+import sys
 import time
 
 from src.api.exchanges.cex.binance.binance_spot_api import BinanceSpotAPI
@@ -201,6 +202,7 @@ async def main():
     mexc_collector = MexcCollector(mexc_api, market_repo_mexc, exchanges_repo)
     mexc_futures_collector = MexcFuturesCollector(mexc_futures_api, market_repo_mexc_futures, exchanges_repo)
 
+    crashed = False
     try:
         # Сначала собираем данные о сетях и торговых парах параллельно
         logger.info("Начинаем сбор данных (параллельно)")
@@ -358,6 +360,11 @@ async def main():
                 pass  # Это ожидаемо, если shutdown_event не установлен
 
     except Exception as e:
+        # Отличаем неожиданный сбой (падение БД, необработанное исключение)
+        # от намеренной остановки по SIGTERM/SIGINT (shutdown_event.set()) —
+        # раньше оба пути завершались с exit code 0, и systemd Restart=on-failure
+        # не перезапускал бота при реальном сбое (см. PLAN.md, раздел 6).
+        crashed = True
         logger.exception(f"Необработанное исключение в основном цикле: {str(e)}")
     finally:
         logger.info("Завершение работы, закрытие ресурсов...")
@@ -374,6 +381,8 @@ async def main():
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")
 
+    return 1 if crashed else 0
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
