@@ -342,8 +342,16 @@ async def main():
             # (проверяется каждый цикл, независимо от наличия новых возможностей)
             await paper_strategy.close_ready_positions()
 
-            # Ежесуточная архивация+retention истории (экспорт в data/archive)
-            history_archiver.run_if_due()
+            # Ежесуточная архивация+retention истории (экспорт в data/archive).
+            # run_if_due()/_archive_table() - синхронные psycopg-вызовы; без
+            # to_thread() они блокируют весь event loop на время архивации
+            # (см. PLAN.md 5.5 - 73-минутный паралич главного цикла 2026-07-31,
+            # первый прогон на большом бэклоге). Безопасно только потому, что
+            # весь остальной main loop строго последовательный (await), а
+            # единственная независимая фоновая asyncio-задача (health_monitor)
+            # не трогает БД - иначе конкурентный доступ к одному psycopg conn
+            # из двух потоков был бы небезопасен.
+            await asyncio.to_thread(history_archiver.run_if_due)
 
             # Суточная сводка в лог
             daily_report.log_if_due()
