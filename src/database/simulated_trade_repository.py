@@ -57,6 +57,18 @@ class SimulatedTradeRepository:
             CREATE INDEX IF NOT EXISTS idx_simulated_trades_status
             ON simulated_trades(status)
         """)
+        # Индекс по стороне внешнего ключа обязателен, а не "для скорости
+        # выборок": при DELETE из родительской arbitrage_opportunities
+        # Postgres на КАЖДУЮ удаляемую строку выполняет RI-проверку
+        # SELECT 1 FROM ONLY simulated_trades WHERE $1 = opportunity_id
+        # FOR KEY SHARE. Без индекса это полный seq scan таблицы на каждую
+        # строку — retention-удаление 826К строк упиралось в ~10^11 чтений
+        # и висело 8.5 часов (см. PLAN.md 5.5, инциденты 2026-07-31/08-01).
+        # В плане запроса это НЕ видно: RI-триггеры не входят в EXPLAIN.
+        self.cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_simulated_trades_opportunity_id
+            ON simulated_trades(opportunity_id)
+        """)
         self.conn.commit()
 
     def save_trade(self, trade: SimulatedTrade) -> int:
