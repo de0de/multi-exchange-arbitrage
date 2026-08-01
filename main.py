@@ -49,6 +49,8 @@ shutdown_event = asyncio.Event()
 # PostgreSQL. Без этого systemctl restart во время архивации оставлял
 # зомби-транзакцию, которая жила часами после смерти процесса (PLAN.md 5.5).
 history_archiver = None
+# Суточная сводка — по той же причине: её запросы тоже идут в фоновом потоке
+daily_report = None
 
 def handle_shutdown_signal(sig, frame):
     """Обработчик сигнала завершения."""
@@ -56,6 +58,8 @@ def handle_shutdown_signal(sig, frame):
     logger.info(f"Получен сигнал завершения {sig}. Начинаем корректное завершение работы...")
     if history_archiver is not None:
         history_archiver.cancel_running()
+    if daily_report is not None:
+        daily_report.cancel_running()
     shutdown_event.set()
 
 # Регистрируем обработчики для сигналов SIGINT и SIGTERM
@@ -64,9 +68,9 @@ signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 
 async def main():
-    # history_archiver — модульного уровня: до него должен дотянуться
-    # обработчик сигнала, чтобы отменить архивацию при остановке сервиса
-    global history_archiver
+    # history_archiver и daily_report — модульного уровня: до них должен
+    # дотянуться обработчик сигнала, чтобы отменить их запросы при остановке
+    global history_archiver, daily_report
 
     # Настраиваем логирование и замеряем время выполнения
     setup_logging(log_dir='logs')
@@ -363,8 +367,11 @@ async def main():
             # handle_shutdown_signal -> history_archiver.cancel_running().
             await asyncio.to_thread(history_archiver.run_if_due)
 
-            # Суточная сводка в лог
-            daily_report.log_if_due()
+            # Суточная сводка в лог. Через to_thread по той же причине, что и
+            # архиватор: вызывалась синхронно и блокировала event loop целиком
+            # на всё время своих COUNT(*) — 4 мин 45 с при каждом старте
+            # процесса (замер на проде 2026-08-01, см. PLAN.md 5.5).
+            await asyncio.to_thread(daily_report.log_if_due)
 
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start
