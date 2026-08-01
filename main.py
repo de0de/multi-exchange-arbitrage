@@ -44,10 +44,18 @@ from config.settings import (
 # Обработчики сигналов для корректного завершения
 shutdown_event = asyncio.Event()
 
+# Архиватор виден обработчику сигнала: он работает в фоновом потоке
+# (asyncio.to_thread), и остановить его запрос можно только отменой на стороне
+# PostgreSQL. Без этого systemctl restart во время архивации оставлял
+# зомби-транзакцию, которая жила часами после смерти процесса (PLAN.md 5.5).
+history_archiver = None
+
 def handle_shutdown_signal(sig, frame):
     """Обработчик сигнала завершения."""
     logger = logging.getLogger(__name__)
     logger.info(f"Получен сигнал завершения {sig}. Начинаем корректное завершение работы...")
+    if history_archiver is not None:
+        history_archiver.cancel_running()
     shutdown_event.set()
 
 # Регистрируем обработчики для сигналов SIGINT и SIGTERM
@@ -56,6 +64,10 @@ signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 
 async def main():
+    # history_archiver — модульного уровня: до него должен дотянуться
+    # обработчик сигнала, чтобы отменить архивацию при остановке сервиса
+    global history_archiver
+
     # Настраиваем логирование и замеряем время выполнения
     setup_logging(log_dir='logs')
     logger = logging.getLogger(__name__)
@@ -342,20 +354,14 @@ async def main():
             # (проверяется каждый цикл, независимо от наличия новых возможностей)
             await paper_strategy.close_ready_positions()
 
-            # ВРЕМЕННО ОТКЛЮЧЕНО 2026-08-01 (не начато - расследование другой
-            # сессией). Три инцидента подряд (07-31 73 мин, 08-01 8.5+ часов,
-            # 08-01 повторно сразу после рестарта) - главный цикл вставал,
-            # DELETE FROM arbitrage_opportunities переживал systemctl restart
-            # как zombie-транзакция в Postgres (to_thread() не даёт отменить
-            # фоновый поток при shutdown), блокируя следующую попытку через
-            # pg lock. Рабочая гипотеза (не подтверждена): SELECT * без
-            # именованного/server-side курсора буферизует весь результат
-            # (~14М строк arbitrage_opportunities) в памяти клиента вместо
-            # потокового fetchmany() - см. PLAN.md 5.5. Retention не критичен
-            # для торговли, только для места на диске (запас есть) - безопаснее
-            # копить данные, чем повторить инцидент без присмотра. НЕ включать
-            # обратно без теста именно этой гипотезы (server-side cursor).
-            # await asyncio.to_thread(history_archiver.run_if_due)
+            # Архивация+retention раз в сутки. Отключалась 2026-08-01 из-за
+            # трёх зависаний подряд; корневая причина найдена и устранена -
+            # неиндексированный FK simulated_trades.opportunity_id заставлял
+            # Postgres делать полный seq scan на КАЖДУЮ удаляемую строку
+            # (см. PLAN.md 5.5). to_thread() оставлен: event loop не
+            # блокируется, а остановка сервиса теперь снимает запрос через
+            # handle_shutdown_signal -> history_archiver.cancel_running().
+            await asyncio.to_thread(history_archiver.run_if_due)
 
             # Суточная сводка в лог
             daily_report.log_if_due()
