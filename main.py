@@ -35,10 +35,12 @@ from src.core.futures_spread_monitor import FuturesSpreadMonitor
 from src.core.paper_trading.spot_spot_strategy import SpotSpotStrategy
 from src.utils.logger import setup_logging
 from src.utils.health_monitor import health_monitor
+from src.utils.uptime_push import UptimePush
 from src.database import db
 from config.settings import (
     MIN_SPREAD_PERCENT, MIN_VOLUME_USDT, MAX_STALENESS_SECONDS,
     OB_TTL_SECONDS, TRADE_SIZE_USDT, RETENTION_DAYS,
+    UPTIME_KUMA_PUSH_URL,
 )
 
 # Обработчики сигналов для корректного завершения
@@ -182,6 +184,12 @@ async def main():
     # Суточная сводка в лог (первая — при старте): счётчики всех потоков
     # данных и paper trading, размер БД
     daily_report = DailyReport(conn)
+
+    # Heartbeat в Uptime Kuma. Пингуется в КОНЦЕ итерации главного цикла —
+    # намеренно не из health_monitor, тот живёт своей фоновой корутиной и
+    # горел бы зелёным при параличе главного цикла (см. докстроку
+    # src/utils/uptime_push.py). Пустой URL = мониторинг выключен
+    uptime_push = UptimePush(UPTIME_KUMA_PUSH_URL)
 
     # Мониторинг спот-фьюч / фьюч-фьюч basis: только запись истории
     # (futures_spread_history, funding_rate_history), без симуляции —
@@ -375,6 +383,15 @@ async def main():
             # процесса (замер на проде 2026-08-01, см. PLAN.md 5.5).
             await asyncio.to_thread(daily_report.log_if_due)
 
+            # Heartbeat: итерация дошла до конца. Стоит именно здесь, ПОСЛЕ
+            # всей работы цикла — так пинг доказывает, что цикл живой, а не
+            # что процесс существует. Раз в сутки архивация занимает 7-10
+            # минут и пингов в это время нет: heartbeat-интервал в Kuma
+            # выставлен с запасом (~15 мин), иначе получали бы ложный алерт
+            # каждые сутки, а монитор, который врёт по расписанию, перестают
+            # читать
+            await uptime_push.ping()
+
             # Расчет времени до следующего обновления
             elapsed = time.time() - cycle_start
             sleep_time = max(0.1, update_interval - elapsed)
@@ -404,6 +421,7 @@ async def main():
         await gate_futures_api.close_session()
         await mexc_api.close_session()
         await mexc_futures_api.close_session()
+        await uptime_push.close()
         # Все репозитории работают через единое соединение — закрывается одно
         conn.close()
         logger.info("Все ресурсы успешно закрыты. Приложение завершено.")
