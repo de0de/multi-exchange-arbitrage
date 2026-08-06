@@ -159,27 +159,37 @@ class HistoryArchiver:
         path = self._target_path(table)
 
         try:
-            # Потоковый экспорт чанками — суточный объём arbitrage_opportunities
-            # может достигать миллионов строк, fetchall() съел бы память
-            self.cursor.execute(f"SELECT * FROM {table} WHERE {where}", params)
-            columns = [d[0] for d in self.cursor.description]
-            written = 0
-            with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(columns)
-                while True:
-                    # Запись gzip идёт минутами, и всё это время на стороне БД
-                    # ничего не выполняется — conn.cancel() тут отменять
-                    # нечего. Без явной проверки флага остановка сервиса,
-                    # пришедшая в эту фазу, была бы замечена только ПОСЛЕ
-                    # того, как архиватор успел бы запустить DELETE.
-                    if self._cancelled.is_set():
-                        raise ArchiveCancelled(table)
-                    chunk = self.cursor.fetchmany(self.chunk_rows)
-                    if not chunk:
-                        break
-                    writer.writerows(chunk)
-                    written += len(chunk)
+            # Server-side (именованный) курсор — DECLARE + FETCH FORWARD.
+            # ОБЫЧНЫЙ курсор psycopg буферизует ВЕСЬ результат в PGresult ещё
+            # внутри execute(), до первого fetchmany(): для
+            # futures_spread_history это ~3.2 ГБ разовой аллокации (7.6М строк
+            # × ~417 Б = 161 Б данных + ~256 Б дескрипторов полей на строку,
+            # замер pg_column_size 2026-08-05). Именно это 2026-08-03 в
+            # 20:31:32 UTC привело к kernel OOM-kill процесса на машине с
+            # 7.7 ГБ и без swap (PLAN.md 5.5). С именованным курсором в
+            # памяти живёт только текущий чанк — ~20 МБ.
+            # Комментарий "fetchall() съел бы память" был верен по намерению,
+            # но fetchmany() на обычном курсоре память НЕ экономит: он режет
+            # уже загруженный буфер, а не тянет с сервера по частям.
+            with self.conn.cursor(name=f"archive_{table}") as export_cur:
+                export_cur.itersize = self.chunk_rows
+                export_cur.execute(f"SELECT * FROM {table} WHERE {where}", params)
+                columns = [d[0] for d in export_cur.description]
+                written = 0
+                with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(columns)
+                    while True:
+                        # Проверка перед каждым чанком: остановка сервиса,
+                        # пришедшая в фазу экспорта, иначе была бы замечена
+                        # только ПОСЛЕ того, как архиватор запустил бы DELETE.
+                        if self._cancelled.is_set():
+                            raise ArchiveCancelled(table)
+                        chunk = export_cur.fetchmany(self.chunk_rows)
+                        if not chunk:
+                            break
+                        writer.writerows(chunk)
+                        written += len(chunk)
 
             if self._cancelled.is_set():
                 raise ArchiveCancelled(table)
