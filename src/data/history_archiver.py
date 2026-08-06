@@ -63,7 +63,13 @@ class HistoryArchiver:
         # 2026-07-31/08-01 (PLAN.md 5.5) висели 8.5 часов именно потому, что
         # на сервере statement_timeout = 0 и остановить их было нечем.
         self.statement_timeout_ms = statement_timeout_ms
-        self._last_run = 0.0
+        # Время прошлого прогона ПЕРСИСТЕНТНО (таблица archiver_state), а не
+        # только в памяти процесса. Раньше любой рестарт сбрасывал таймер в 0
+        # и архивация запускалась сразу, заново привязывая суточное
+        # расписание к моменту рестарта — за 2026-07-28…08-04 это произошло
+        # ТРИЖДЫ (needrestart после обновлений ОС, OOM-kill, ручные рестарты),
+        # каждый раз сдвигая время архивации (PLAN.md 5.5).
+        self._last_run = self._load_last_run()
         # Взводится на время архивации: главный поток по нему понимает, есть
         # ли что отменять при получении сигнала остановки.
         self._active = threading.Event()
@@ -71,6 +77,50 @@ class HistoryArchiver:
         # запроса пошёл бы архивировать следующую таблицу и завис бы уже
         # на ней — при остановке сервиса нужно выйти из прогона целиком.
         self._cancelled = threading.Event()
+
+    def _load_last_run(self) -> float:
+        """
+        Читает время прошлого прогона из БД (0.0, если запусков ещё не было).
+
+        Таблица создаётся здесь же по тому же паттерну, что и в репозиториях —
+        аддитивно, `CREATE TABLE IF NOT EXISTS`, без миграции.
+        """
+        try:
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS archiver_state (
+                    key   TEXT PRIMARY KEY,
+                    value DOUBLE PRECISION NOT NULL
+                )
+            """)
+            self.cursor.execute(
+                "SELECT value FROM archiver_state WHERE key = 'last_run'")
+            row = self.cursor.fetchone()
+            self.conn.commit()
+            return row[0] if row else 0.0
+        except psycopg.Error as e:
+            # Не смогли прочитать — ведём себя как раньше (запуск сразу).
+            # Молча падать нельзя: расписание тихо съедет, и это не заметят.
+            self.conn.rollback()
+            self.logger.error(
+                f"Не удалось прочитать время прошлой архивации, "
+                f"расписание начнётся заново: {e}"
+            )
+            return 0.0
+
+    def _save_last_run(self, ts: float):
+        """Сохраняет время прогона, чтобы оно пережило рестарт процесса."""
+        try:
+            self.cursor.execute("""
+                INSERT INTO archiver_state (key, value) VALUES ('last_run', %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (ts,))
+            self.conn.commit()
+        except psycopg.Error as e:
+            self.conn.rollback()
+            self.logger.error(
+                f"Не удалось сохранить время архивации, следующий рестарт "
+                f"сдвинет расписание: {e}"
+            )
 
     def run_if_due(self, now: float = None) -> bool:
         """
@@ -80,7 +130,11 @@ class HistoryArchiver:
         now = now if now is not None else time.time()
         if now - self._last_run < self.check_interval:
             return False
+        # Отметка ставится ДО работы, как и раньше: если прогон упадёт, он не
+        # будет повторяться в цикле рестартов — retention подождёт до
+        # следующих суток. Теперь ещё и переживает перезапуск процесса.
         self._last_run = now
+        self._save_last_run(now)
 
         cutoff = now - self.retention_days * 86400
         self._cancelled.clear()
