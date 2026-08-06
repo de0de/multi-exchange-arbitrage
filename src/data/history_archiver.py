@@ -46,7 +46,7 @@ class HistoryArchiver:
         self,
         conn: psycopg.Connection,
         archive_dir: str = "data/archive",
-        retention_days: float = 14.0,
+        retention_days: float = 7.0,
         check_interval: float = 86400.0,
         chunk_rows: int = 50000,
         statement_timeout_ms: int = 900000,

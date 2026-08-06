@@ -38,7 +38,7 @@ from src.utils.health_monitor import health_monitor
 from src.database import db
 from config.settings import (
     MIN_SPREAD_PERCENT, MIN_VOLUME_USDT, MAX_STALENESS_SECONDS,
-    OB_TTL_SECONDS, TRADE_SIZE_USDT,
+    OB_TTL_SECONDS, TRADE_SIZE_USDT, RETENTION_DAYS,
 )
 
 # Обработчики сигналов для корректного завершения
@@ -174,8 +174,10 @@ async def main():
 
     # Архиватор истории: раз в сутки экспортирует устаревшие строки
     # (spread_history, futures_spread_history, arbitrage_opportunities)
-    # в data/archive/*.csv.gz и только затем удаляет их (retention 14 дней)
-    history_archiver = HistoryArchiver(conn)
+    # в data/archive/*.csv.gz и только затем удаляет их. Горизонт — из .env
+    # (RETENTION_DAYS, по умолчанию 7 суток); раньше был зашит дефолтом
+    # конструктора 14.0 и отсюда не передавался вообще
+    history_archiver = HistoryArchiver(conn, retention_days=RETENTION_DAYS)
 
     # Суточная сводка в лог (первая — при старте): счётчики всех потоков
     # данных и paper trading, размер БД
