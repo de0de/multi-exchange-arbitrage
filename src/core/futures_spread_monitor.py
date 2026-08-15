@@ -38,9 +38,10 @@ class FuturesSpreadMonitor:
     # биржи: комбинации генерируются автоматически (см. __init__):
     #   спот×фьюч — ВСЕ пары, включая кросс-биржевые (n_spot × n_fut),
     #   фьюч×фьюч — все сочетания без повторов (C(n_fut, 2))
-    SPOT_EXCHANGES: List[str] = ["binance", "kucoin", "gate", "mexc"]
+    SPOT_EXCHANGES: List[str] = ["binance", "kucoin", "gate", "mexc", "bybit"]
     FUTURES_EXCHANGES: List[str] = [
         "binance_futures", "kucoin_futures", "gate_futures", "mexc_futures",
+        "bybit_futures",
     ]
 
     def __init__(

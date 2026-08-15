@@ -52,6 +52,7 @@ class SpreadMonitor:
         "kucoin_trading_pairs",
         "gate_trading_pairs",
         "mexc_trading_pairs",
+        "bybit_trading_pairs",
     ]
 
     # Маппинг: exchange_name (из БД) → exchange_display_name (из API)
@@ -64,6 +65,8 @@ class SpreadMonitor:
         "gate_futures": "Gate.io Futures",
         "mexc": "MEXC",
         "mexc_futures": "MEXC Futures",
+        "bybit": "Bybit",
+        "bybit_futures": "Bybit Futures",
     }
 
     def __init__(

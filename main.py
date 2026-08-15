@@ -21,6 +21,10 @@ from src.data.collectors.cex.gate_futures_collector import GateFuturesCollector
 from src.data.collectors.cex.mexc_collector import MexcCollector
 from src.data.collectors.cex.mexc_futures_collector import MexcFuturesCollector
 from src.data.collectors.cex.order_book_collector import OrderBookCollector
+from src.api.exchanges.cex.bybit.bybit_spot_api import BybitSpotAPI
+from src.api.exchanges.cex.bybit.bybit_futures_api import BybitFuturesAPI
+from src.data.collectors.cex.bybit_collector import BybitCollector
+from src.data.collectors.cex.bybit_futures_collector import BybitFuturesCollector
 from src.data.history_archiver import HistoryArchiver
 from src.utils.daily_report import DailyReport
 from src.database.market_repository import MarketRepository
@@ -94,6 +98,8 @@ async def main():
     gate_futures_api = GateFuturesAPI()
     mexc_api = MexcSpotAPI()
     mexc_futures_api = MexcFuturesAPI()
+    bybit_api = BybitSpotAPI()
+    bybit_futures_api = BybitFuturesAPI()
 
     # Создаем экземпляры репозиториев с общим подключением
     logger.info("Инициализация репозиториев")
@@ -110,10 +116,16 @@ async def main():
     market_repo_gate_futures = MarketRepository(conn, "gate_futures")
     market_repo_mexc = MarketRepository(conn, "mexc")
     market_repo_mexc_futures = MarketRepository(conn, "mexc_futures")
+    # Slug строго "bybit"/"bybit_futures" — тот же вид, что у остальных
+    # четырёх. Рассинхрон slug'ов уже однажды породил дублирующиеся
+    # таблицы в этой БД (PLAN.md раздел 6)
+    market_repo_bybit = MarketRepository(conn, "bybit")
+    market_repo_bybit_futures = MarketRepository(conn, "bybit_futures")
     funding_repo_binance_futures = FundingRateRepository(conn, "binance_futures")
     funding_repo_kucoin_futures = FundingRateRepository(conn, "kucoin_futures")
     funding_repo_gate_futures = FundingRateRepository(conn, "gate_futures")
     funding_repo_mexc_futures = FundingRateRepository(conn, "mexc_futures")
+    funding_repo_bybit_futures = FundingRateRepository(conn, "bybit_futures")
 
     # Репозитории Order Book (общее соединение — PostgreSQL штатно
     # обслуживает всех писателей процесса)
@@ -125,6 +137,8 @@ async def main():
     order_book_repo_gate_futures = OrderBookRepository(conn, "gate_futures")
     order_book_repo_mexc = OrderBookRepository(conn, "mexc")
     order_book_repo_mexc_futures = OrderBookRepository(conn, "mexc_futures")
+    order_book_repo_bybit = OrderBookRepository(conn, "bybit")
+    order_book_repo_bybit_futures = OrderBookRepository(conn, "bybit_futures")
 
     # Создаем OrderBookCollector и регистрируем источники
     ob_collector = OrderBookCollector()
@@ -136,6 +150,8 @@ async def main():
     ob_collector.add_source(gate_futures_api, order_book_repo_gate_futures)
     ob_collector.add_source(mexc_api, order_book_repo_mexc)
     ob_collector.add_source(mexc_futures_api, order_book_repo_mexc_futures)
+    ob_collector.add_source(bybit_api, order_book_repo_bybit)
+    ob_collector.add_source(bybit_futures_api, order_book_repo_bybit_futures)
 
     # Словари для передачи в SpreadMonitor
     apis_dict = {
@@ -147,6 +163,8 @@ async def main():
         "Gate.io Futures": gate_futures_api,
         "MEXC": mexc_api,
         "MEXC Futures": mexc_futures_api,
+        "Bybit": bybit_api,
+        "Bybit Futures": bybit_futures_api,
     }
     order_book_repos_dict = {
         "binance": order_book_repo_binance,
@@ -157,6 +175,8 @@ async def main():
         "gate_futures": order_book_repo_gate_futures,
         "mexc": order_book_repo_mexc,
         "mexc_futures": order_book_repo_mexc_futures,
+        "bybit": order_book_repo_bybit,
+        "bybit_futures": order_book_repo_bybit_futures,
     }
 
     # Создаем SpreadMonitor
@@ -217,6 +237,8 @@ async def main():
     health_monitor.register_exchange("Gate.io Futures")
     health_monitor.register_exchange("MEXC")
     health_monitor.register_exchange("MEXC Futures")
+    health_monitor.register_exchange("Bybit")
+    health_monitor.register_exchange("Bybit Futures")
 
     # Создаем коллекторы
     binance_collector = BinanceCollector(binance_api, market_repo_binance, exchanges_repo)
@@ -227,6 +249,8 @@ async def main():
     gate_futures_collector = GateFuturesCollector(gate_futures_api, market_repo_gate_futures, exchanges_repo)
     mexc_collector = MexcCollector(mexc_api, market_repo_mexc, exchanges_repo)
     mexc_futures_collector = MexcFuturesCollector(mexc_futures_api, market_repo_mexc_futures, exchanges_repo)
+    bybit_collector = BybitCollector(bybit_api, market_repo_bybit, exchanges_repo)
+    bybit_futures_collector = BybitFuturesCollector(bybit_futures_api, market_repo_bybit_futures, exchanges_repo)
 
     crashed = False
     try:
@@ -240,7 +264,9 @@ async def main():
             gate_collector.collect_data(),
             gate_futures_collector.collect_data(),
             mexc_collector.collect_data(),
-            mexc_futures_collector.collect_data()
+            mexc_futures_collector.collect_data(),
+            bybit_collector.collect_data(),
+            bybit_futures_collector.collect_data()
         )
 
         # Создаем и заполняем таблицу currencies
@@ -254,7 +280,7 @@ async def main():
 
         # Создаем и заполняем таблицу unique_trading_pairs
         logger.info("Извлекаем уникальные торговые пары")
-        trading_tables = ["binance_trading_pairs", "binance_futures_trading_pairs", "kucoin_trading_pairs", "kucoin_futures_trading_pairs", "gate_trading_pairs", "gate_futures_trading_pairs", "mexc_trading_pairs", "mexc_futures_trading_pairs"]
+        trading_tables = ["binance_trading_pairs", "binance_futures_trading_pairs", "kucoin_trading_pairs", "kucoin_futures_trading_pairs", "gate_trading_pairs", "gate_futures_trading_pairs", "mexc_trading_pairs", "mexc_futures_trading_pairs", "bybit_trading_pairs", "bybit_futures_trading_pairs"]
         unique_pairs = trading_pairs_repo.extract_unique_trading_pairs(trading_tables)
         logger.info(f"Извлечено уникальных торговых пар: {len(unique_pairs)}")
 
@@ -272,6 +298,8 @@ async def main():
         market_repo_gate_futures.update_currency_ids()
         market_repo_mexc.update_currency_ids()
         market_repo_mexc_futures.update_currency_ids()
+        market_repo_bybit.update_currency_ids()
+        market_repo_bybit_futures.update_currency_ids()
         logger.info("ID валют успешно обновлены")
 
         # Обновляем pair_id в таблицах trading_pairs
@@ -284,6 +312,8 @@ async def main():
         market_repo_gate_futures.update_pair_ids()
         market_repo_mexc.update_pair_ids()
         market_repo_mexc_futures.update_pair_ids()
+        market_repo_bybit.update_pair_ids()
+        market_repo_bybit_futures.update_pair_ids()
         logger.info("ID торговых пар успешно обновлены")
 
         # Интервал обновления в секундах
@@ -306,11 +336,13 @@ async def main():
                 gate_futures_collector.collect_data(),
                 mexc_collector.collect_data(),
                 mexc_futures_collector.collect_data(),
+                bybit_collector.collect_data(),
+                bybit_futures_collector.collect_data(),
                 return_exceptions=True
             )
 
             # Обрабатываем результаты для каждой биржи
-            for exchange_name, result in zip(["Binance", "Binance Futures", "KuCoin", "KuCoin Futures", "Gate.io", "Gate.io Futures", "MEXC", "MEXC Futures"], results):
+            for exchange_name, result in zip(["Binance", "Binance Futures", "KuCoin", "KuCoin Futures", "Gate.io", "Gate.io Futures", "MEXC", "MEXC Futures", "Bybit", "Bybit Futures"], results):
                 request_time = (time.time() - cycle_start) * 1000  # в миллисекундах
                 if isinstance(result, Exception):
                     logger.error(f"Ошибка при сборе данных с {exchange_name}: {str(result)}")
@@ -330,6 +362,7 @@ async def main():
                 kucoin_futures_api.fetch_funding_rates(),
                 gate_futures_api.fetch_funding_rates(),
                 mexc_futures_api.fetch_funding_rates(),
+                bybit_futures_api.fetch_funding_rates(),
                 return_exceptions=True,
             )
             funding_repos = [
@@ -337,6 +370,10 @@ async def main():
                 ("KuCoin Futures", funding_repo_kucoin_futures),
                 ("Gate.io Futures", funding_repo_gate_futures),
                 ("MEXC Futures", funding_repo_mexc_futures),
+                # Bybit тоже читает из кеша, заполненного fetch_trading_pairs
+                # в этом же цикле: fundingRate приходит прямо в тикерах,
+                # сетевого запроса под funding у него нет вообще
+                ("Bybit Futures", funding_repo_bybit_futures),
             ]
             for (exchange_name, repo), result in zip(funding_repos, funding_results):
                 if isinstance(result, Exception):
@@ -421,6 +458,8 @@ async def main():
         await gate_futures_api.close_session()
         await mexc_api.close_session()
         await mexc_futures_api.close_session()
+        await bybit_api.close_session()
+        await bybit_futures_api.close_session()
         await uptime_push.close()
         # Все репозитории работают через единое соединение — закрывается одно
         conn.close()
