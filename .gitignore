@@ -11,7 +11,6 @@ data/*.db-wal
 data/*.db-shm
 data/archive/
 HANDOFF.md
-ONBOARDING_PROMPT.md
 logs/
 tmp_test_*.py
 scratch_*.py
